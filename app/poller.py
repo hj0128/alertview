@@ -1,14 +1,16 @@
 """주기적 수집 → (페이지 단위 즉시 저장) 신규 감지 → 알림."""
 from __future__ import annotations
+import asyncio
 import logging
 from typing import List
 
 import httpx
 
-from . import db
+from . import db, config
 from .adapters import active_adapters
 from .adapters.base import Campaign
 from .notifier import notify_new
+from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
 
@@ -25,9 +27,10 @@ async def collect_new(demo: bool) -> List[Campaign]:
             def on_page(items, ad=ad, first_time=first_time, stats=stats) -> bool:
                 db_new = 0
                 for c in items:
-                    if db.is_seen(c.site, c.cid):
-                        continue
-                    db.record_campaign(c)
+                    seen = db.is_seen(c.site, c.cid)
+                    db.record_campaign(c)          # 항상 저장/갱신(변동값 최신화)
+                    if seen:
+                        continue                   # 이미 본 건: 갱신만 하고 신규 카운트 제외
                     stats["fresh"] += 1
                     db_new += 1
                     if not first_time:
@@ -44,8 +47,82 @@ async def collect_new(demo: bool) -> List[Campaign]:
     return new_items
 
 
+_mrblog_alerted = False    # 쿠키 만료 알림 중복 방지(만료 상태 동안 1회만)
+
+
+async def _check_mrblog_cookie(bot, demo: bool) -> None:
+    """미블 세션 쿠키 만료 시 관리자(ADMIN_CHAT_ID)에게만 1회 알림."""
+    global _mrblog_alerted
+    if not (bot and config.ADMIN_CHAT_ID):
+        return
+    ad = next((a for a in active_adapters(demo) if getattr(a, "key", "") == "mrblog"), None)
+    if ad is None:
+        return
+    if getattr(ad, "cookie_expired", False):
+        if not _mrblog_alerted:
+            try:
+                await bot.send_message(
+                    chat_id=int(config.ADMIN_CHAT_ID),
+                    text=("⚠️ 미블 세션 쿠키가 만료된 것 같아요.\n"
+                          ".env 의 MRBLOG_COOKIE 를 새로 로그인한 값으로 교체하고 재시작해 주세요.\n"
+                          "(지금은 미블 홈 공개분만 수집 중이며, 다른 사이트는 정상입니다.)"))
+                _mrblog_alerted = True
+                log.info("미블 쿠키 만료 알림 발송(관리자)")
+            except Exception as e:
+                log.warning("미블 만료 알림 실패: %s", e)
+    else:
+        _mrblog_alerted = False    # 정상 복구 시 다음 만료 때 다시 알릴 수 있도록 리셋
+
+
+async def _kakao_backfill() -> None:
+    """내장 사전이 못 잡은 지역(역/랜드마크 등)을 카카오 로컬 API로 보정 후 캐시."""
+    key = config.KAKAO_REST_API_KEY
+    if not key:
+        return
+    pend = db.regions_pending(50)
+    if not pend:
+        return
+    headers = {"Authorization": f"KakaoAK {key}"}
+    filled = 0
+    async with httpx.AsyncClient(trust_env=False, timeout=15.0) as client:
+        for raw in pend:
+            norm = db.region_cache_get(raw)
+            if norm is None:                 # 아직 조회 안 한 원본
+                norm = ""
+                try:
+                    r = await client.get(
+                        "https://dapi.kakao.com/v2/local/search/keyword.json",
+                        params={"query": raw, "size": 1}, headers=headers)
+                    if r.status_code == 200:
+                        docs = r.json().get("documents") or []
+                        if docs:
+                            addr = docs[0].get("address_name") or docs[0].get("road_address_name") or ""
+                            norm = normalize_offline(addr)
+                    elif r.status_code in (401, 403):
+                        # 키/권한/IP 문제 → 항목마다 재시도 무의미. 이번 주기 즉시 중단.
+                        log.warning("[kakao] 인증 거부(HTTP %s). 카카오 콘솔에서 '카카오맵' 사용 설정 ON, "
+                                    "보안 '허용 IP' 비우기(또는 서버 IP 등록), REST API 키 확인 필요. "
+                                    "→ 이번 주기 중단", r.status_code)
+                        return
+                    else:
+                        log.warning("[kakao] HTTP %s ('%s')", r.status_code, raw)
+                        continue            # 일시 오류는 캐시하지 않음(다음에 재시도)
+                except Exception as e:
+                    log.warning("[kakao] '%s' 지오코딩 실패: %s", raw, e)
+                    continue
+                db.region_cache_set(raw, norm)   # 빈 결과(매칭없음)도 캐시 → 반복 호출 방지
+            if norm:
+                db.set_region_for_raw(raw, norm)
+                filled += 1
+            await asyncio.sleep(0.1)
+    if filled:
+        log.info("[kakao] 지역 보정 %d건 적용", filled)
+
+
 async def run_poll(bot, demo: bool) -> None:
     new_items = await collect_new(demo)
+    await _check_mrblog_cookie(bot, demo)
+    await _kakao_backfill()
     if new_items:
         sent = await notify_new(bot, new_items)
         log.info("신규 %d건 → 메시지 %d건 발송", len(new_items), sent)

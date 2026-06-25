@@ -1,5 +1,6 @@
 """웹 UI: 텔레그램 로그인 + 키워드/지역 설정. 봇과 같은 SQLite DB를 공유."""
 from __future__ import annotations
+import datetime
 import hashlib
 import hmac
 import time
@@ -10,7 +11,12 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, config
 from .matcher import matches
+from .adapters import ALL_ADAPTERS
 from .adapters.base import Campaign
+
+# 사용자에게 노출할 체험단(사이트) 목록 = 활성 어댑터
+WEB_SITES = [{"key": a.key, "name": a.name} for a in ALL_ADAPTERS if a.enabled]
+_SITE_NAMES = {a.key: a.name for a in ALL_ADAPTERS}
 
 WEB_REGIONS = [
     "서울", "경기", "인천", "강원", "충북", "충남", "대전", "세종",
@@ -78,35 +84,50 @@ async def logout(request: Request):
     return RedirectResponse("/", status_code=303)
 
 
+def _region_tree_ordered() -> dict:
+    """db.region_tree()를 시/도 알려진 순서(WEB_REGIONS)대로 정렬해 반환."""
+    tree = db.region_tree()
+    order = {name: i for i, name in enumerate(WEB_REGIONS)}
+    keys = sorted(tree.keys(), key=lambda s: (order.get(s, len(order)), s))
+    return {k: tree[k] for k in keys}
+
+
 @app.get("/api/state")
 async def state(request: Request):
     uid = _uid(request)
+    region_tree = _region_tree_ordered()
     if not uid:
         # 비로그인(게스트): 설정값은 비우고 logged_in=False 로 응답.
         return {
             "logged_in": False,
             "active": False,
             "name": "",
+            "sites": [],
             "keywords": [], "regions": [], "categories": [], "channels": [],
             "max_competition": None, "max_dday": None,
+            "all_sites": WEB_SITES,
             "all_regions": WEB_REGIONS,
             "all_categories": WEB_CATEGORIES,
             "all_channels": WEB_CHANNELS,
+            "region_tree": region_tree,
         }
     f = db.get_all_filters(uid)
     return {
         "logged_in": True,
         "active": db.is_active(uid),
         "name": request.session.get("name", ""),
+        "sites": f["sites"],
         "keywords": f["keywords"],
         "regions": f["regions"],
         "categories": f["categories"],
         "channels": f["channels"],
         "max_competition": f["max_competition"],
         "max_dday": f["max_dday"],
+        "all_sites": WEB_SITES,
         "all_regions": WEB_REGIONS,
         "all_categories": WEB_CATEGORIES,
         "all_channels": WEB_CHANNELS,
+        "region_tree": region_tree,
     }
 
 
@@ -132,6 +153,17 @@ async def kw_del(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/site/toggle")
+async def site_toggle(request: Request):
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    val = ((await request.json()).get("value") or "").strip()
+    cur = db.list_values(uid, "site")
+    db.remove_filter(uid, "site", val) if val in cur else db.add_filter(uid, "site", val)
+    return {"ok": True}
+
+
 @app.post("/api/region/toggle")
 async def region_toggle(request: Request):
     uid = _uid(request)
@@ -144,6 +176,21 @@ async def region_toggle(request: Request):
         db.remove_filter(uid, "region", val)
     else:
         db.add_filter(uid, "region", val)
+    return {"ok": True}
+
+
+@app.post("/api/region/set")
+async def region_set(request: Request):
+    """지역 필터 전체를 한 번에 교체(시/도 '전체' ↔ 구 자동 정리용)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    vals = body.get("values") or []
+    vals = [str(v).strip() for v in vals if str(v).strip()]
+    db.clear_filters(uid, "region")
+    for v in vals:
+        db.add_filter(uid, "region", v)
     return {"ok": True}
 
 
@@ -214,6 +261,7 @@ async def campaigns(request: Request):
                 return None
         md = _num("maxdday")
         f = {
+            "sites": _csv("sites"),
             "keywords": _csv("kw"), "regions": _csv("region"),
             "categories": _csv("cat"), "channels": _csv("ch"),
             "max_competition": _num("maxcomp"),
@@ -244,15 +292,25 @@ async def campaigns(request: Request):
             channel=r["channel"] or "", dday=r["dday"], applicants=r["applicants"],
             recruit=r["recruit"], competition=r["competition"],
         )
+        # D-day 는 저장된 마감일에서 매번 계산(재수집 없이 매일 자동 감소)
+        dl = r["deadline"] if "deadline" in r.keys() else None
+        if dl:
+            try:
+                c.dday = (datetime.date.fromisoformat(dl) - datetime.date.today()).days
+            except ValueError:
+                pass
+        if c.dday is not None and c.dday < 0:
+            c.dday = None   # 마감 지난 건 카운트다운 숨김
         if not matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
-                       f["max_competition"], f["max_dday"]):
+                       f["max_competition"], f["max_dday"], sites=f.get("sites") or []):
             continue
         is_new = (r["first_seen"] or "").startswith(today)   # 오늘 수집분 = NEW(읽음 여부 무관)
         is_viewed = (r["site"], r["cid"]) in viewed          # 클릭(확인)했으면 읽음 → 연하게
         if is_new:
             new_count += 1
         matched.append({
-            "site": r["site"], "cid": r["cid"], "title": c.title, "url": c.url,
+            "site": r["site"], "site_name": _SITE_NAMES.get(r["site"], r["site"]),
+            "cid": r["cid"], "title": c.title, "url": c.url,
             "region": c.region, "category": c.category, "channel": c.channel,
             "dday": c.dday, "competition": c.competition,
             "applicants": c.applicants, "recruit": c.recruit,
@@ -335,7 +393,11 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  :root{--blue:#2d6cdf}
  *{box-sizing:border-box}
  body{font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f5f6f8;margin:0;color:#222}
- main{max-width:480px;margin:0 auto;padding:20px 16px 60px}
+ main{max-width:1240px;margin:0 auto;padding:20px 16px 60px}
+ .layout{display:flex;gap:16px;align-items:flex-start}
+ .col-left{flex:0 0 360px;max-width:360px}
+ .col-right{flex:1;min-width:0;position:sticky;top:20px}
+ @media(max-width:860px){.layout{flex-direction:column}.col-left{flex:none;max-width:none;width:100%}.col-right{position:static;width:100%}}
  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
  h1{font-size:20px;margin:0}
  .sub{color:#666;font-size:13px;margin:0 0 20px}
@@ -351,6 +413,10 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .opts{display:flex;flex-wrap:wrap;gap:8px}
  .opt{padding:8px 14px;border:1px solid #d8dbe0;border-radius:20px;background:#fff;font-size:14px}
  .opt.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+ .gubox{margin-top:8px;padding:10px 12px;background:#f6f8fc;border:1px solid #e3e9f3;border-left:3px solid var(--blue);border-radius:10px}
+ .guhd{font-size:12px;color:#5a6b8c;font-weight:700;margin-bottom:8px}
+ .opt.sub{font-size:13px;padding:6px 11px;border-radius:14px;border-style:dashed;background:#fff}
+ .opt.sub.on{border-style:solid;background:var(--blue);color:#fff;border-color:var(--blue)}
  .muted{color:#888;font-size:13px;margin-top:8px}
  .top{display:flex;align-items:center;justify-content:space-between}
  .switch{position:relative;width:48px;height:28px}
@@ -360,8 +426,8 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .switch input:checked+.slider{background:#34c759}
  .switch input:checked+.slider:before{transform:translateX(20px)}
  a.logout{color:#888;font-size:13px;text-decoration:none}
- #feedwrap{max-height:600px;overflow-y:auto;margin-top:10px}
- #feed{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ #feedwrap{max-height:calc(100vh - 170px);overflow-y:auto;margin-top:10px}
+ #feed{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
  .item{position:relative;display:block;border:1px solid #eee;border-radius:12px;overflow:hidden;text-decoration:none;color:#222;background:#fff}
  .item:hover{box-shadow:0 2px 12px rgba(0,0,0,.09)}
  .item.viewed{opacity:.5}
@@ -373,8 +439,10 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
  .pill{font-size:10.5px;background:#f1f3f7;color:#566;border-radius:6px;padding:2px 6px}
  .pill.good{background:#e4f7e6;color:#1b7a2e;font-weight:700}
+ .pill.site{background:#ece9fb;color:#5b3fb0;font-weight:600}
  .badge{position:absolute;top:6px;left:6px;background:#ff3b30;color:#fff;font-size:10px;font-weight:700;border-radius:7px;padding:2px 7px;z-index:1}
  .seenbtn{background:#eef2fb;color:#2d4373;padding:7px 12px;font-weight:600}
+ #newbanner{width:100%;background:var(--blue);color:#fff;font-weight:600;padding:10px;border-radius:10px;margin-top:10px;font-size:13px;border:none;cursor:pointer}
  .num{display:flex;align-items:center;gap:8px;margin-bottom:10px}
  .num label{width:64px;font-size:14px;color:#444}
  .preset{background:#fff4e6;color:#b25a00;border:1px solid #ffd8a8;padding:7px 12px;border-radius:20px;font-size:13px;font-weight:600}
@@ -392,6 +460,8 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   <div class=wrap>__LOGIN_WIDGET__</div>
 </div>
 
+<div class=layout>
+<div class=col-left>
 <div id=notifcard style="display:none">
 <div class=card><div class=top>
   <h2 style="margin:0">알림 받기</h2>
@@ -406,6 +476,12 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
     <button class=preset onclick="preset('urgent')">⏰ 마감 임박 (D-3 이하)</button>
     <button class=preset onclick="preset('reset')">초기화</button>
   </div>
+</div>
+
+<div class=card>
+  <h2>체험단</h2>
+  <div class=opts id=sites></div>
+  <p class=muted>보고 싶은 체험단만 선택. 안 고르면 전체.</p>
 </div>
 
 <div class=card>
@@ -432,8 +508,10 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 
 <div class=card>
   <h2>지역</h2>
-  <div class=opts id=regions></div>
-  <p class=muted>지역을 고르면 그 지역만. 키워드와 같이 쓰면 둘 다 맞아야 알림.</p>
+  <div class=opts id=sidos></div>
+  <div id=gus></div>
+  <div class=chips id=regchips></div>
+  <p class=muted>시/도를 누르면 구 단위로 세분화해 고를 수 있어요. '○○ 전체'를 고르면 그 시/도 전부. 키워드와 같이 쓰면 둘 다 맞아야 알림.</p>
 </div>
 
 <div class=card>
@@ -444,14 +522,20 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
     <input type=number min=0 id=maxdday placeholder="예: 3" onchange="saveNum('max_dday','maxdday')"></div>
   <p class=muted>경쟁률 = 신청자÷모집인원. 낮을수록 당첨 확률↑. 비워두면 제한 없음.</p>
 </div>
+</div>
+<div class=col-right>
 <div class=card>
   <div class=top><h2 style="margin:0">📋 캠페인 <span id=cnt class=muted></span></h2>
     <button class=seenbtn onclick="seenAll()">모두 읽음</button></div>
+  <button id=newbanner onclick="showNew()" style="display:none"></button>
   <div id=feedwrap><div id=feed></div></div>
+</div>
+</div>
 </div>
 </main>
 <script>
 let S={}, guest=false;
+let curSido=null;   // 지역: 현재 펼친 시/도
 async function load(){
   const r=await fetch('/api/state');
   S=await r.json();
@@ -465,9 +549,13 @@ async function load(){
 function refreshLocal(){ render(); loadCampaigns(); }   // 게스트: 서버 저장 없이 화면만 갱신
 function toggleArr(arr,v){const i=arr.indexOf(v); if(i>=0)arr.splice(i,1); else arr.push(v);}
 let feedOffset=0, feedTotal=0, feedLoading=false, feedDone=false;
+const viewedLocal=new Set();   // 이번 세션에서 클릭(읽음)한 항목 → 자동 새로고침에도 유지
+const loadedKeys=new Set();     // 현재 피드에 표시된 캠페인 키 → 새 항목 감지용
+const vkey=(s,c)=>s+'|'+c;
 function feedParams(){
   const p=new URLSearchParams();
   if(guest){
+    if(S.sites&&S.sites.length)p.set('sites',S.sites.join(','));
     if(S.keywords.length)p.set('kw',S.keywords.join(','));
     if(S.regions.length)p.set('region',S.regions.join(','));
     if(S.categories.length)p.set('cat',S.categories.join(','));
@@ -479,7 +567,9 @@ function feedParams(){
 }
 async function loadCampaigns(reset=true){
   if(feedLoading)return; feedLoading=true;
-  if(reset){feedOffset=0; feedDone=false; document.getElementById('feed').innerHTML='';}
+  if(reset){feedOffset=0; feedDone=false; loadedKeys.clear();
+    document.getElementById('feed').innerHTML='';
+    const nb=document.getElementById('newbanner'); if(nb) nb.style.display='none';}
   const p=feedParams(); p.set('offset',feedOffset); p.set('limit',60);
   const r=await fetch('/api/campaigns?'+p.toString());
   if(r.status===401){feedLoading=false;return;}
@@ -498,11 +588,14 @@ function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':
 function appendFeed(arr){
   const f=document.getElementById('feed');
   arr.forEach(c=>{
-    const a=document.createElement('a'); a.className='item'+(c.is_viewed?' viewed':'');
+    loadedKeys.add(vkey(c.site,c.cid));
+    const a=document.createElement('a'); a.className='item'+((c.is_viewed||viewedLocal.has(vkey(c.site,c.cid)))?' viewed':'');
     a.href=c.url; a.target='_blank'; a.rel='noopener';
     const meta=[c.region,c.category,c.channel].filter(Boolean).join(' \u00b7 ');
     let pills='';
-    if(c.dday!=null) pills+='<span class=pill>D-'+c.dday+'</span>';
+    if(c.site_name) pills+='<span class="pill site">'+esc(c.site_name)+'</span>';
+    if(c.dday!=null) pills+='<span class="pill'+(c.dday<=1?' good':'')+'">'+(c.dday===0?'오늘마감':'D-'+c.dday)+'</span>';
+    if(c.applicants!=null||c.recruit!=null) pills+='<span class=pill>\uc2e0\uccad '+(c.applicants!=null?c.applicants:'-')+' / \ubaa8\uc9d1 '+(c.recruit!=null?c.recruit:'-')+'</span>';
     if(c.competition!=null) pills+='<span class="pill'+(c.competition<=1?' good':'')+'">\uacbd\uc7c1\ub960 '+c.competition+'</span>';
     a.innerHTML=(c.is_new?'<span class=badge>NEW</span>':'')+
       '<div class="thumb ph">🍽️</div>'+
@@ -522,9 +615,31 @@ function makePh(){const d=document.createElement('div');d.className='thumb ph';d
 async function markView(site,cid,el){
   if(el.classList.contains('viewed'))return;
   el.classList.add('viewed');               // \uc77d\uc74c
+  viewedLocal.add(vkey(site,cid));          // \uc790\ub3d9 \uc0c8\ub85c\uace0\uce68\uc5d0\ub3c4 \uc77d\uc74c \uc720\uc9c0
   if(!guest) fetch('/api/view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({site,cid})});
 }
-async function seenAll(){await fetch('/api/seen-all',{method:'POST'});await loadCampaigns(true);}
+async function seenAll(){
+  if(!guest) await fetch('/api/seen-all',{method:'POST'});   // 로그인 시 서버에도 저장
+  loadedKeys.forEach(k=>viewedLocal.add(k));                  // 게스트 포함: 현재 목록 읽음 처리
+  document.querySelectorAll('#feed .item').forEach(el=>el.classList.add('viewed'));
+}
+function showNew(){
+  document.getElementById('newbanner').style.display='none';
+  const w=document.getElementById('feedwrap'); if(w) w.scrollTop=0;
+  loadCampaigns(true);
+}
+async function checkNew(){   // 목록을 갈아끼우지 않고 새 캠페인이 있는지만 확인
+  if(feedLoading) return;
+  const p=feedParams(); p.set('offset',0); p.set('limit',60);
+  let d;
+  try{ const r=await fetch('/api/campaigns?'+p.toString()); if(!r.ok) return; d=await r.json(); }
+  catch(e){ return; }
+  let n=0;
+  for(const c of d.campaigns){ if(loadedKeys.has(vkey(c.site,c.cid))) break; n++; }
+  const b=document.getElementById('newbanner');
+  if(!b) return;
+  if(n>0){ b.textContent='🆕 새 캠페인 '+n+'개 — 보기'; b.style.display='block'; }
+}
 (function(){const w=document.getElementById('feedwrap'); if(!w)return;
   w.addEventListener('scroll',function(){
     if(feedLoading||feedDone)return;
@@ -543,15 +658,88 @@ function opts(elId,all,selected,toggleFn){
     const b=document.createElement('button');b.className='opt'+(on?' on':'');b.textContent=v;
     b.onclick=()=>toggleFn(v);c.appendChild(b);});
 }
+function optBtn(label,on,fn){
+  const b=document.createElement('button');b.className='opt'+(on?' on':'');
+  b.textContent=label;b.onclick=fn;return b;
+}
+function renderRegions(){
+  const tree=S.region_tree||{};
+  const sel=S.regions||[];
+  // 1) 시/도 버튼 (선택된 구가 있는 시/도는 점으로 표시)
+  const sc=document.getElementById('sidos'); sc.innerHTML='';
+  Object.keys(tree).forEach(sd=>{
+    const picked=sel.some(r=>r===sd||r.startsWith(sd+' '));
+    const b=optBtn(sd+(picked?' •':''), curSido===sd, ()=>{
+      curSido=(curSido===sd?null:sd); renderRegions();
+    });
+    b.classList.add('sido');
+    sc.appendChild(b);
+  });
+  // 2) 펼친 시/도의 구 목록(별도 박스로 구분)
+  const gc=document.getElementById('gus'); gc.innerHTML='';
+  if(curSido){
+    const box=document.createElement('div'); box.className='gubox';
+    const hd=document.createElement('div'); hd.className='guhd';
+    hd.textContent='📍 '+curSido+' 세부 지역 선택';
+    box.appendChild(hd);
+    const wrap=document.createElement('div'); wrap.className='opts';
+    const allB=optBtn(curSido+' 전체', sel.includes(curSido), ()=>pickRegion(curSido));
+    allB.classList.add('sub');
+    wrap.appendChild(allB);
+    (tree[curSido]||[]).forEach(gu=>{
+      const val=curSido+' '+gu;
+      const b=optBtn(gu, sel.includes(val), ()=>pickRegion(val));
+      b.classList.add('sub');
+      wrap.appendChild(b);
+    });
+    box.appendChild(wrap);
+    gc.appendChild(box);
+  }
+  // 3) 선택된 지역 칩
+  chips('regchips', sel, delRegion);
+}
+function pickRegion(v){
+  let regs=(S.regions||[]).slice();
+  if(regs.includes(v)){
+    regs=regs.filter(x=>x!==v);            // 이미 선택 → 해제
+  } else if(v.indexOf(' ')<0){
+    // 시/도 '전체' 선택 → 같은 시/도의 구들 자동 해제
+    regs=regs.filter(x=>!x.startsWith(v+' '));
+    regs.push(v);
+  } else {
+    // 특정 구 선택 → 같은 시/도의 '전체' 자동 해제
+    const sido=v.split(' ')[0];
+    regs=regs.filter(x=>x!==sido);
+    regs.push(v);
+  }
+  saveRegions(regs);
+}
+function saveRegions(regs){
+  S.regions=regs;
+  if(guest){refreshLocal();return;}
+  post('/api/region/set',{values:regs}).then(load);
+}
+function delRegion(v){ pickRegion(v); }
+function renderSites(){
+  const c=document.getElementById('sites'); if(!c)return; c.innerHTML='';
+  (S.all_sites||[]).forEach(s=>{
+    c.appendChild(optBtn(s.name, (S.sites||[]).includes(s.key), ()=>toggleSite(s.key)));
+  });
+}
+async function toggleSite(v){
+  if(guest){toggleArr(S.sites,v);refreshLocal();return;}
+  await post('/api/site/toggle',{value:v});await load();
+}
 function render(){
   document.getElementById('hello').textContent = guest
     ? '키워드·지역으로 검색해 보세요. 알림으로 받고 싶으면 로그인하세요.'
     : (S.name?S.name+' ':'')+'설정은 자동 저장돼요.';
   document.getElementById('active').checked=!!S.active;
+  renderSites();
   chips('kwchips',S.keywords,delKw);
   opts('categories',S.all_categories,S.categories,toggleCategory);
   opts('channels',S.all_channels,S.channels,toggleChannel);
-  opts('regions',S.all_regions,S.regions,toggleRegion);
+  renderRegions();
   document.getElementById('maxcomp').value=(S.max_competition??'');
   document.getElementById('maxdday').value=(S.max_dday??'');
 }
@@ -590,6 +778,5 @@ async function preset(kind){
   await load();
 }
 load();
-setInterval(function(){const w=document.getElementById('feedwrap');
-  if(w && w.scrollTop<60) loadCampaigns(true);}, 20000);
+setInterval(checkNew, 30000);   // 30초마다 새 캠페인 유무만 확인(목록은 그대로)
 </script></body></html>"""

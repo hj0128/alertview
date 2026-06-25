@@ -11,6 +11,7 @@ SQL 은 양쪽 모두에서 동작하도록 통일했다.
 """
 from __future__ import annotations
 
+import datetime
 import logging
 import sqlite3
 import threading
@@ -18,6 +19,7 @@ import time
 from typing import List, Optional, Tuple
 
 from . import config
+from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +116,7 @@ def _create_schema() -> None:
             title TEXT, url TEXT,
             region TEXT, category TEXT, channel TEXT,
             dday INTEGER, applicants INTEGER, recruit INTEGER, competition REAL, image TEXT,
+            deadline TEXT,
             first_seen TEXT,
             {seen_seq}
             PRIMARY KEY(site, cid)
@@ -123,6 +126,11 @@ def _create_schema() -> None:
         CREATE TABLE IF NOT EXISTS viewed (
             chat_id {int_pk} NOT NULL, site TEXT NOT NULL, cid TEXT NOT NULL,
             PRIMARY KEY(chat_id, site, cid)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS region_cache (
+            raw TEXT PRIMARY KEY, norm TEXT
         )
         """,
     ]
@@ -139,6 +147,8 @@ def _migrate() -> None:
         ("seen", "applicants", "applicants INTEGER"), ("seen", "recruit", "recruit INTEGER"),
         ("seen", "competition", "competition REAL"),
         ("seen", "image", "image TEXT"),
+        ("seen", "deadline", "deadline TEXT"),   # 마감 절대 날짜(YYYY-MM-DD) → D-day 동적 계산용
+        ("seen", "region_raw", "region_raw TEXT"),  # 사이트 원본 지역 표기(정규화 전)
     ]
     if _is_pg():
         for table, _col, decl in add:
@@ -152,6 +162,23 @@ def _migrate() -> None:
                 _conn.execute(f"ALTER TABLE {table} ADD COLUMN {decl}")
     # 기존 사용자: seen_until 없으면 지금 시점으로 백필(과거 캠페인 NEW 폭탄 방지)
     _conn.execute(_q("UPDATE users SET seen_until=? WHERE seen_until IS NULL"), (_now(),))
+    # 기존 캠페인: 저장된 dday로 마감일(deadline) 1회 백필 → 재수집 없이도 D-day 동적 계산
+    if _is_pg():
+        _conn.execute("UPDATE seen SET deadline=(first_seen::date + (dday || ' days')::interval)::text "
+                      "WHERE deadline IS NULL AND dday IS NOT NULL")
+    else:
+        _conn.execute("UPDATE seen SET deadline=date(first_seen, '+' || dday || ' days') "
+                      "WHERE deadline IS NULL AND dday IS NOT NULL")
+    # 지역 정규화: 원본 보존(region_raw) + 내장 사전으로 region 재정규화(1회)
+    _conn.execute("UPDATE seen SET region_raw=region WHERE region_raw IS NULL")
+    rows = _conn.execute(
+        "SELECT DISTINCT region_raw AS r FROM seen WHERE region_raw IS NOT NULL AND region_raw<>''"
+    ).fetchall()
+    for row in rows:
+        raw = row["r"]
+        norm = normalize_offline(raw)
+        if norm != raw:            # 변환됐거나(미해결이면 '') 다를 때만 갱신
+            _conn.execute(_q("UPDATE seen SET region=? WHERE region_raw=?"), (norm, raw))
 
 
 def _c():
@@ -319,6 +346,7 @@ def get_all_filters(chat_id: int) -> dict:
             return None
     md = get_scalar(chat_id, "max_dday")
     return {
+        "sites": list_values(chat_id, "site"),
         "keywords": list_values(chat_id, "keyword"),
         "regions": list_values(chat_id, "region"),
         "categories": list_values(chat_id, "category"),
@@ -345,14 +373,37 @@ def is_seen(site: str, cid: str) -> bool:
 
 
 def record_campaign(c) -> None:
-    """캠페인 상세를 저장(신규일 때만 first_seen 기록)."""
+    """캠페인 저장/갱신. first_seen 은 최초 1회만 기록(NEW 판정 기준).
+    D-day·신청·모집·경쟁률 등 변동값은 매 수집마다 갱신한다.
+    단, 새 값이 비어(NULL)있으면 기존 값을 보존(COALESCE) → 일시적 누락으로 덮어쓰지 않음.
+    D-day 는 절대 마감일(deadline=오늘+dday)로 환산해 저장한다.
+    → 화면에서는 deadline-오늘 로 계산하므로 재수집 없이도 매일 자동 감소."""
+    deadline = None
+    if c.dday is not None:
+        deadline = (datetime.date.today() + datetime.timedelta(days=c.dday)).isoformat()
+    # 지역 정규화(잠금 밖에서): 원본 보존 + 표준화. 사전 미해결이면 카카오 캐시 조회.
+    raw_region = c.region or ""
+    region = normalize_offline(raw_region)
+    if not region and raw_region:
+        region = region_cache_get(raw_region) or ""
     with _lock:
         _c().execute(_q(
-            "INSERT INTO seen(site, cid, title, url, region, category, channel, "
-            "dday, applicants, recruit, competition, image, first_seen) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING"),
-            (c.site, c.cid, c.title, c.url, c.region, c.category, c.channel,
-             c.dday, c.applicants, c.recruit, c.competition, getattr(c, "image", ""), _now()),
+            "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "
+            "dday, applicants, recruit, competition, image, deadline, first_seen) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(site, cid) DO UPDATE SET "
+            "title=excluded.title, url=excluded.url, region=excluded.region, "
+            "region_raw=excluded.region_raw, "
+            "category=excluded.category, channel=excluded.channel, "
+            "dday=COALESCE(excluded.dday, seen.dday), "
+            "applicants=COALESCE(excluded.applicants, seen.applicants), "
+            "recruit=COALESCE(excluded.recruit, seen.recruit), "
+            "competition=COALESCE(excluded.competition, seen.competition), "
+            "image=COALESCE(NULLIF(excluded.image, ''), seen.image), "
+            "deadline=COALESCE(excluded.deadline, seen.deadline)"),
+            (c.site, c.cid, c.title, c.url, region, raw_region, c.category, c.channel,
+             c.dday, c.applicants, c.recruit, c.competition, getattr(c, "image", ""),
+             deadline, _now()),
         )
         _c().commit()
 
@@ -364,3 +415,59 @@ def list_recent(limit: int = 200) -> List[dict]:
             f"SELECT * FROM seen ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ?"),
             (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def region_tree() -> dict:
+    """저장된 지역을 시/도 → [구...] 로 묶어 반환(실데이터 기반).
+    예: '인천 남동' → {'인천': ['남동', ...]}. 필터 UI 세분화에 사용."""
+    with _lock:
+        rows = _c().execute(
+            "SELECT DISTINCT region FROM seen WHERE region IS NOT NULL AND region<>''"
+        ).fetchall()
+    tree: dict = {}
+    for r in rows:
+        reg = (r["region"] or "").strip()
+        if not reg:
+            continue
+        parts = reg.split(None, 1)      # '인천 남동구' -> ['인천', '남동구']
+        sido = parts[0]
+        gu = parts[1].strip() if len(parts) > 1 else ""
+        tree.setdefault(sido, set())
+        if gu:
+            tree[sido].add(gu)
+    return {k: sorted(v) for k, v in tree.items()}
+
+
+# --------------------------------------------------------------------------- #
+# 지역 정규화 캐시(카카오 지오코딩 결과 보관) + 백필
+# --------------------------------------------------------------------------- #
+def region_cache_get(raw: str):
+    with _lock:
+        row = _c().execute(_q("SELECT norm FROM region_cache WHERE raw=?"), (raw,)).fetchone()
+    return row["norm"] if row else None
+
+
+def region_cache_set(raw: str, norm: str) -> None:
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO region_cache(raw, norm) VALUES(?,?) "
+            "ON CONFLICT(raw) DO UPDATE SET norm=excluded.norm"), (raw, norm))
+        _c().commit()
+
+
+def regions_pending(limit: int = 50) -> List[str]:
+    """아직 정규화되지 않은(region 비어있는) 원본 지역들 - 카카오 보정 대상."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT DISTINCT region_raw AS r FROM seen "
+            "WHERE (region IS NULL OR region='') AND region_raw IS NOT NULL AND region_raw<>'' "
+            "LIMIT ?"), (limit,)).fetchall()
+    return [r["r"] for r in rows]
+
+
+def set_region_for_raw(raw: str, norm: str) -> int:
+    """특정 원본 지역을 가진 모든 캠페인의 region 을 갱신."""
+    with _lock:
+        cur = _c().execute(_q("UPDATE seen SET region=? WHERE region_raw=?"), (norm, raw))
+        _c().commit()
+        return cur.rowcount
