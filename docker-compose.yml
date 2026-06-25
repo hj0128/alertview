@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alertview}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alertview}
+      POSTGRES_DB: ${POSTGRES_DB:-alertview}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 필요 시 호스트에서 직접 접속하려면 주석 해제 (운영에선 닫아두는 편이 안전)
+    # ports:
+    #   - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-alertview} -d ${POSTGRES_DB:-alertview}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 앱 컨테이너 → db 서비스로 연결. .env 의 값보다 우선.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-alertview}:${POSTGRES_PASSWORD:-alertview}@db:5432/${POSTGRES_DB:-alertview}
+      # 컨테이너 내부 포트는 8000 고정(아래 ports 매핑과 일치).
+      WEB_PORT: "8000"
+    ports:
+      - "${HOST_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

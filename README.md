@@ -51,6 +51,32 @@ python main.py
 30초마다 가짜 캠페인이 "새로 떴다"고 신호 → 텔레그램까지 실제로 오는지 바로 확인할 수 있습니다.
 확인 후 `DEMO=0` 으로 되돌리세요.
 
+## 도커로 실행 (PostgreSQL 포함)
+
+DB를 프로젝트 폴더가 아닌 **별도 PostgreSQL 컨테이너**에 두고, 데이터는 도커 named volume(`pgdata`)에 보관합니다. 코드 재배포·컨테이너 삭제와 무관하게 데이터가 유지됩니다.
+
+```bash
+cp .env.example .env
+# .env 에 TELEGRAM_BOT_TOKEN 등 입력 (POSTGRES_* 는 기본값 그대로 두어도 됨)
+docker compose up -d --build
+```
+
+- `db`: PostgreSQL 16 (데이터는 `pgdata` 볼륨)
+- `app`: 봇 + 웹 UI. compose 가 `DATABASE_URL` 을 자동으로 주입해 `db` 에 연결합니다.
+- 웹 UI: `http://localhost:8000` (호스트 포트는 `.env` 의 `HOST_PORT` 로 변경)
+
+자주 쓰는 명령:
+
+```bash
+docker compose logs -f app      # 앱 로그
+docker compose down             # 중지 (데이터는 보존)
+docker compose down -v          # 중지 + 데이터 볼륨까지 삭제(초기화)
+docker compose exec db psql -U alertview -d alertview   # DB 접속
+```
+
+> **백엔드 자동 선택**: 앱은 `DATABASE_URL` 이 있으면 PostgreSQL, 없으면 SQLite 파일(`DB_PATH`)을 씁니다.
+> 그래서 `docker compose` 로는 Postgres, 로컬에서 `python main.py` 나 테스트(`python tests/verify.py`)는 별도 서버 없이 SQLite 로 그대로 돌아갑니다.
+
 ## 배포 (24시간 가동)
 
 이 서버는 **항상 켜져 있어야** 알림이 끊기지 않습니다. 가벼운 호스팅 예시:
@@ -88,7 +114,7 @@ cheheomdan-alert/
 ├─ main.py              # 진입점 (봇 + 스케줄러)
 ├─ app/
 │  ├─ config.py         # 환경변수
-│  ├─ db.py             # SQLite (사용자/필터/본 캠페인)
+│  ├─ db.py             # 저장소 (PostgreSQL 또는 SQLite 자동선택)
 │  ├─ matcher.py        # 키워드·지역 매칭 규칙
 │  ├─ notifier.py       # 텔레그램 메시지 포맷·발송
 │  ├─ poller.py         # 수집→신규감지→알림
@@ -99,7 +125,7 @@ cheheomdan-alert/
 │     ├─ demo.py        # 데모용 가짜 어댑터
 │     └─ stubs.py       # 나머지 사이트 자리표시
 ├─ requirements.txt
-├─ Dockerfile / Procfile
+├─ Dockerfile / docker-compose.yml / Procfile
 └─ .env.example
 ```
 

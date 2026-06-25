@@ -18,6 +18,11 @@ BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
 # --- 수집 ---
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))
 DEMO = os.getenv("DEMO", "0").strip() in ("1", "true", "True")
+
+# --- DB ---
+# DATABASE_URL 이 있으면 PostgreSQL(운영/도커), 없으면 SQLite 파일(DB_PATH)로 폴백.
+# 예) postgresql://alertview:alertview@db:5432/alertview
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DB_PATH = os.getenv("DB_PATH", "data.db")
 SEND_GAP = float(os.getenv("SEND_GAP", "0.05"))
 
