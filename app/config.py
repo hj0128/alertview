@@ -51,4 +51,4 @@ KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
 
 # 웹 피드: 무한스크롤 1회 로드 개수, 필터링 시 훑을 최대 행 수
 FEED_PAGE = int(os.getenv("FEED_PAGE", "60"))
-FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "10000"))
+FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "20000"))

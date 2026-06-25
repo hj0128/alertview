@@ -25,7 +25,9 @@ async def _poll_job(ctx):
 
 
 def _build_bot() -> Application:
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = (Application.builder().token(config.BOT_TOKEN)
+           .get_updates_connection_pool_size(4)   # 종료 시 get_updates 정리 PoolTimeout 방지
+           .build())
     for name, fn in [
         ("start", bot.cmd_start), ("help", bot.cmd_help), ("add", bot.cmd_add),
         ("region", bot.cmd_region), ("del", bot.cmd_del), ("list", bot.cmd_list),
