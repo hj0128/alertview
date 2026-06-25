@@ -19,7 +19,7 @@ import time
 from typing import List, Optional, Tuple
 
 from . import config
-from .region_norm import normalize_offline
+from .region_norm import normalize_offline, region_from_title
 
 log = logging.getLogger(__name__)
 
@@ -169,16 +169,18 @@ def _migrate() -> None:
     else:
         _conn.execute("UPDATE seen SET deadline=date(first_seen, '+' || dday || ' days') "
                       "WHERE deadline IS NULL AND dday IS NOT NULL")
-    # 지역 정규화: 원본 보존(region_raw) + 내장 사전으로 region 재정규화(1회)
     _conn.execute("UPDATE seen SET region_raw=region WHERE region_raw IS NULL")
-    rows = _conn.execute(
-        "SELECT DISTINCT region_raw AS r FROM seen WHERE region_raw IS NOT NULL AND region_raw<>''"
-    ).fetchall()
-    for row in rows:
-        raw = row["r"]
-        norm = normalize_offline(raw)
-        if norm != raw:            # 변환됐거나(미해결이면 '') 다를 때만 갱신
-            _conn.execute(_q("UPDATE seen SET region=? WHERE region_raw=?"), (norm, raw))
+    # '기타'로 잘못 잡힌 행은 제목에서 위치를 다시 추출해 교정(예: 성수→서울 성동구,
+    # '[기자단] ..성수점' 같은 가게이름은 지역 없음으로). 교정되면 '기타'에서 빠져 재처리 안 됨.
+    try:
+        rows = _conn.execute("SELECT site, cid, title FROM seen WHERE region='기타'").fetchall()
+        for r in rows:
+            cand = region_from_title(r["title"] or "")
+            region = normalize_offline(cand) if cand else ""
+            _conn.execute(_q("UPDATE seen SET region=?, region_raw=? WHERE site=? AND cid=?"),
+                          (region, cand, r["site"], r["cid"]))
+    except Exception as e:
+        log.warning("'기타' 지역 재산출 마이그레이션 건너뜀: %s", e)
 
 
 def _c():
@@ -381,9 +383,9 @@ def record_campaign(c) -> None:
     deadline = None
     if c.dday is not None:
         deadline = (datetime.date.today() + datetime.timedelta(days=c.dday)).isoformat()
-    # 지역 정규화(잠금 밖에서): 원본 보존 + 표준화. 사전 미해결이면 카카오 캐시 조회.
-    raw_region = c.region or ""
-    region = normalize_offline(raw_region)
+    # 지역: 제목의 '위치 대괄호'에서만 추출(유형태그·가게이름 오인 방지) → 표준화 → 카카오 캐시.
+    raw_region = region_from_title(c.title or "")
+    region = normalize_offline(raw_region) if raw_region else ""
     if not region and raw_region:
         region = region_cache_get(raw_region) or ""
     with _lock:
@@ -415,6 +417,28 @@ def list_recent(limit: int = 200) -> List[dict]:
             f"SELECT * FROM seen ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ?"),
             (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_page(offset: int, limit: int) -> List[dict]:
+    """최신순 페이지(필터 없을 때 DB 레벨 페이지네이션용)."""
+    with _lock:
+        rows = _c().execute(_q(
+            f"SELECT * FROM seen ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ? OFFSET ?"),
+            (limit, offset)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_seen() -> int:
+    with _lock:
+        return _c().execute("SELECT COUNT(*) AS n FROM seen").fetchone()["n"]
+
+
+def count_seen_new(date_prefix: str) -> int:
+    """first_seen 이 오늘인(=NEW) 캠페인 수."""
+    with _lock:
+        return _c().execute(_q(
+            "SELECT COUNT(*) AS n FROM seen WHERE first_seen LIKE ?"),
+            (date_prefix + "%",)).fetchone()["n"]
 
 
 def region_tree() -> dict:
@@ -456,11 +480,13 @@ def region_cache_set(raw: str, norm: str) -> None:
 
 
 def regions_pending(limit: int = 50) -> List[str]:
-    """아직 정규화되지 않은(region 비어있는) 원본 지역들 - 카카오 보정 대상."""
+    """아직 정규화 안 됐고 카카오도 아직 시도 안 한 원본 지역들.
+    이미 region_cache 에 있으면(성공/무매칭 무관) 다시 조회하지 않는다."""
     with _lock:
         rows = _c().execute(_q(
             "SELECT DISTINCT region_raw AS r FROM seen "
             "WHERE (region IS NULL OR region='') AND region_raw IS NOT NULL AND region_raw<>'' "
+            "AND region_raw NOT IN (SELECT raw FROM region_cache) "
             "LIMIT ?"), (limit,)).fetchall()
     return [r["r"] for r in rows]
 

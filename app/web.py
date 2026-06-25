@@ -284,39 +284,57 @@ async def campaigns(request: Request):
     limit = max(1, min(limit, 200))
 
     today = time.strftime("%Y-%m-%d")  # '오늘' 올라온 캠페인 = NEW
+
+    def _live_dday(r):
+        # D-day 는 저장된 마감일에서 매번 계산(재수집 없이 매일 자동 감소)
+        dl = r["deadline"] if "deadline" in r.keys() else None
+        if dl:
+            try:
+                d = (datetime.date.fromisoformat(dl) - datetime.date.today()).days
+                return d if d >= 0 else None
+            except ValueError:
+                pass
+        return r["dday"]
+
+    def _to_dict(r):
+        return {
+            "site": r["site"], "site_name": _SITE_NAMES.get(r["site"], r["site"]),
+            "cid": r["cid"], "title": r["title"] or "", "url": r["url"] or "",
+            "region": r["region"] or "", "category": r["category"] or "",
+            "channel": r["channel"] or "", "dday": _live_dday(r),
+            "competition": r["competition"], "applicants": r["applicants"], "recruit": r["recruit"],
+            "image": r["image"] if "image" in r.keys() else "",
+            "is_new": (r["first_seen"] or "").startswith(today),
+            "is_viewed": (r["site"], r["cid"]) in viewed,
+        }
+
+    has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
+                      or f["channels"] or f["max_competition"] is not None or f["max_dday"] is not None)
+
+    if not has_filter:
+        # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
+        total = db.count_seen()
+        new_count = db.count_seen_new(today)
+        page = [_to_dict(r) for r in db.list_page(offset, limit)]
+        return {"campaigns": page, "new_count": new_count, "total": total,
+                "offset": offset, "limit": limit, "has_more": offset + limit < total}
+
+    # 필터 적용 → 최신 FEED_SCAN_MAX 건을 훑어 매칭
     matched, new_count = [], 0
     for r in db.list_recent(config.FEED_SCAN_MAX):
         c = Campaign(
             site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
             url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
-            channel=r["channel"] or "", dday=r["dday"], applicants=r["applicants"],
+            channel=r["channel"] or "", dday=_live_dday(r), applicants=r["applicants"],
             recruit=r["recruit"], competition=r["competition"],
         )
-        # D-day 는 저장된 마감일에서 매번 계산(재수집 없이 매일 자동 감소)
-        dl = r["deadline"] if "deadline" in r.keys() else None
-        if dl:
-            try:
-                c.dday = (datetime.date.fromisoformat(dl) - datetime.date.today()).days
-            except ValueError:
-                pass
-        if c.dday is not None and c.dday < 0:
-            c.dday = None   # 마감 지난 건 카운트다운 숨김
         if not matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
                        f["max_competition"], f["max_dday"], sites=f.get("sites") or []):
             continue
-        is_new = (r["first_seen"] or "").startswith(today)   # 오늘 수집분 = NEW(읽음 여부 무관)
-        is_viewed = (r["site"], r["cid"]) in viewed          # 클릭(확인)했으면 읽음 → 연하게
-        if is_new:
+        d = _to_dict(r)
+        if d["is_new"]:
             new_count += 1
-        matched.append({
-            "site": r["site"], "site_name": _SITE_NAMES.get(r["site"], r["site"]),
-            "cid": r["cid"], "title": c.title, "url": c.url,
-            "region": c.region, "category": c.category, "channel": c.channel,
-            "dday": c.dday, "competition": c.competition,
-            "applicants": c.applicants, "recruit": c.recruit,
-            "image": r["image"] if "image" in r.keys() else "",
-            "is_new": is_new, "is_viewed": is_viewed,
-        })
+        matched.append(d)
     page = matched[offset:offset + limit]
     return {"campaigns": page, "new_count": new_count, "total": len(matched),
             "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}

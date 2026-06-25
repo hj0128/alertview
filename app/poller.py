@@ -110,10 +110,13 @@ async def _kakao_backfill() -> None:
                 except Exception as e:
                     log.warning("[kakao] '%s' 지오코딩 실패: %s", raw, e)
                     continue
-                db.region_cache_set(raw, norm)   # 빈 결과(매칭없음)도 캐시 → 반복 호출 방지
-            if norm:
-                db.set_region_for_raw(raw, norm)
-                filled += 1
+                # 카카오도 못 잡으면 '기타'로 분류(위치 표기는 있었으나 매핑 실패).
+                norm = norm or "기타"
+                db.region_cache_set(raw, norm)   # 결과 캐시 → 반복 호출 방지
+            else:
+                norm = norm or "기타"            # 과거 빈 캐시도 '기타'로
+            db.set_region_for_raw(raw, norm)
+            filled += 1
             await asyncio.sleep(0.1)
     if filled:
         log.info("[kakao] 지역 보정 %d건 적용", filled)
