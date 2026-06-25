@@ -1,6 +1,7 @@
 """캠페인 ↔ 사용자 필터 매칭 규칙.
 
 필터 종류 (각각 '설정돼 있을 때만' 적용, 서로는 AND):
+  - sites     : 선택한 체험단(사이트)만 통과 (OR)  예: dinnerqueen, nollawa
   - keywords  : 하나라도 캠페인 텍스트에 포함되면 통과 (OR)
   - regions   : 하나라도 포함되면 통과 (OR)
   - categories: 하나라도 일치하면 통과 (OR)  예: 맛집, 카페
@@ -22,7 +23,10 @@ def matches(
     channels: List[str] = (),
     max_competition: Optional[float] = None,
     max_dday: Optional[int] = None,
+    sites: List[str] = (),
 ) -> bool:
+    if sites and c.site not in sites:
+        return False
     text = c.text_for_match()
     low = text.lower()
     if keywords and not any(k.lower() in low for k in keywords):

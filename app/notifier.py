@@ -48,7 +48,7 @@ async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
         f = db.get_all_filters(chat_id)
         for c in campaigns:
             if matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
-                       f["max_competition"], f["max_dday"]):
+                       f["max_competition"], f["max_dday"], sites=f["sites"]):
                 try:
                     await bot.send_message(
                         chat_id=chat_id, text=format_campaign(c),
