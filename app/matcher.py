@@ -31,8 +31,12 @@ def matches(
     low = text.lower()
     if keywords and not any(k.lower() in low for k in keywords):
         return False
-    if regions and not any(r in text for r in regions):
-        return False
+    # 지역은 제목이 아니라 region 필드로만 매칭(예: 제목 '더기타레슨'이 '기타' 지역에 안 걸리게).
+    # 시/도 선택('서울')은 '서울 송파구' 같은 하위까지 포함, 구 선택은 정확히 일치.
+    if regions:
+        reg = c.region or ""
+        if not any(reg == r or reg.startswith(r + " ") for r in regions):
+            return False
     if categories and not any(cat in text for cat in categories):
         return False
     if channels and not any(ch in text for ch in channels):
