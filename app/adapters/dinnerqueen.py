@@ -75,7 +75,12 @@ def _parse_page(html: str) -> List[Campaign]:
         node = _card_node(a)
         blob = node.get_text(" ", strip=True) if node else title
         image = _pick_img(node) or _pick_img(a)
-        dday = _to_int(mm.group(1)) if (mm := _DDAY_RE.search(blob)) else None
+        if (mm := _DDAY_RE.search(blob)):
+            dday = _to_int(mm.group(1))
+        elif "D'day" in blob or "D-day" in blob or "Dday" in blob:
+            dday = 0          # 오늘 마감
+        else:
+            dday = None
         applicants = recruit = competition = None
         if (am := _APPLY_RE.search(blob)):
             applicants, recruit = _to_int(am.group(1)), _to_int(am.group(2))

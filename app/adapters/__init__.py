@@ -4,19 +4,22 @@ from typing import List
 
 from .base import BaseAdapter, Campaign  # noqa: F401 (재노출)
 from .dinnerqueen import DinnerQueenAdapter
+from .nollawa import NollawaAdapter
+from .reviewplace import ReviewPlaceAdapter
+from .mrblog import MrblogAdapter
+from .reviewnote import ReviewNoteAdapter
+from .gangnam import GangnamAdapter
 from .demo import DemoAdapter
-from .stubs import (
-    RevuAdapter, ReviewNoteAdapter, ReviewPlaceAdapter,
-    MrblogAdapter, NollawaAdapter,
-)
+from .stubs import RevuAdapter
 
 ALL_ADAPTERS = [
     DinnerQueenAdapter(),
-    RevuAdapter(),
-    ReviewNoteAdapter(),
+    NollawaAdapter(),
     ReviewPlaceAdapter(),
     MrblogAdapter(),
-    NollawaAdapter(),
+    ReviewNoteAdapter(),
+    GangnamAdapter(),
+    RevuAdapter(),
 ]
 
 

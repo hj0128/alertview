@@ -20,19 +20,3 @@ class _Stub(BaseAdapter):
 
 class RevuAdapter(_Stub):
     key, name = "revu", "레뷰"
-
-
-class ReviewNoteAdapter(_Stub):
-    key, name = "reviewnote", "리뷰노트"
-
-
-class ReviewPlaceAdapter(_Stub):
-    key, name = "reviewplace", "리뷰플레이스"
-
-
-class MrblogAdapter(_Stub):
-    key, name = "mrblog", "미블"
-
-
-class NollawaAdapter(_Stub):
-    key, name = "nollawa", "놀러와체험단"
