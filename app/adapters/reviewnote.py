@@ -1,0 +1,122 @@
+"""리뷰노트(reviewnote.co.kr) 어댑터.
+
+공개 JSON API 를 페이징해 전체 캠페인을 수집한다(로그인 불필요).
+  GET /api/v2/campaigns?s=new&page=N  →  {page, objects, has_more, total_pages, total_count}
+  s=new 정렬 = 최신순(page=0 이 최신). 16건/페이지.
+객체 필드: id, title, offer, channel, sort, city(시/도), sido.name(시군구),
+          applicantCount, infNum, applyEndAt(ISO), imageKey, category.title, isPremium
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime
+import logging
+from typing import List, Optional
+from urllib.parse import quote
+
+import httpx
+
+from .. import config
+from .base import BaseAdapter, Campaign, UA
+
+BASE = "https://www.reviewnote.co.kr"
+API = BASE + "/api/v2/campaigns?s=new&page={page}"
+_CH = {"BLOG": "블로그", "REELS": "릴스", "CLIP": "클립",
+       "INSTAGRAM": "인스타", "SHORTS": "유튜브", "YOUTUBE": "유튜브"}
+_FB = "https://firebasestorage.googleapis.com/v0/b/reviewnote-e92d9.appspot.com/o/{key}?alt=media"
+log = logging.getLogger(__name__)
+
+
+def _dday_from(iso: str) -> Optional[int]:
+    if not iso:
+        return None
+    try:
+        d = (datetime.date.fromisoformat(iso[:10]) - datetime.date.today()).days
+    except (ValueError, TypeError):
+        return None
+    return d if d >= 0 else None
+
+
+def _to_campaign(o: dict) -> Optional[Campaign]:
+    cid = str(o.get("id") or "").strip()
+    title0 = (o.get("title") or "").strip()
+    if not cid or not title0:
+        return None
+    offer = (o.get("offer") or "").strip()
+    short = (offer[:40] + "…") if len(offer) > 41 else offer
+
+    city = (o.get("city") or "").strip()
+    gu = ((o.get("sido") or {}).get("name") or "").strip()
+    region = "" if city in ("", "재택", "온라인") else (city + (" " + gu if gu else "")).strip()
+
+    sort = o.get("sort")
+    cat = ((o.get("category") or {}).get("title") or "").strip()
+    category = "배송" if sort == "DELIVERY" else cat
+
+    applicants = o.get("applicantCount")
+    recruit = o.get("infNum")
+    competition = round(applicants / recruit, 1) if (applicants is not None and recruit) else None
+
+    ik = (o.get("imageKey") or "").strip()
+    image = _FB.format(key=quote(ik, safe="")) if ik else ""
+
+    title = (f"[{region}] " if region else "") + title0 + (f" {short}" if short else "")
+    return Campaign(
+        site="reviewnote", site_name="리뷰노트", cid=cid, title=title.strip(),
+        url=f"{BASE}/campaigns/{cid}",
+        region=region, category=category,
+        channel=_CH.get(o.get("channel"), "블로그"),
+        dday=_dday_from(o.get("applyEndAt")),
+        applicants=applicants, recruit=recruit, competition=competition,
+        image=image,
+    )
+
+
+class ReviewNoteAdapter(BaseAdapter):
+    key = "reviewnote"
+    name = "리뷰노트"
+    enabled = True
+
+    async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
+        out, seen = [], set()
+        cap = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500
+        # 이 API 는 Referer/Origin 이 없으면 403(빈 배열) 을 준다.
+        headers = {
+            "User-Agent": UA,
+            "Accept": "application/json",
+            "Referer": BASE + "/campaigns",
+            "Origin": BASE,
+        }
+        log.info("[reviewnote] 수집 시작...")
+        for page in range(0, cap):
+            try:
+                r = await client.get(API.format(page=page), headers=headers, timeout=20.0)
+                if r.status_code != 200:
+                    log.warning("[reviewnote] page=%d HTTP %s → 중단", page, r.status_code)
+                    break
+                j = r.json()
+            except Exception as e:
+                log.warning("[reviewnote] page=%d 요청 실패: %s", page, e)
+                break
+            d = j.get("data") if isinstance(j.get("data"), dict) else j
+            objs = d.get("objects") or []
+            if not objs:
+                break
+            page_new = []
+            for o in objs:
+                c = _to_campaign(o)
+                if c and c.cid not in seen:
+                    seen.add(c.cid)
+                    page_new.append(c)
+            out.extend(page_new)
+            keep = True
+            if on_page and page_new:
+                keep = on_page(page_new)        # 최신순이라 새 항목 없으면 조기 종료 안전
+            log.info("[reviewnote] page=%d +%d건 (누적 %d건)", page, len(page_new), len(out))
+            if not d.get("has_more"):
+                break
+            if keep is False:
+                break
+            await asyncio.sleep(0.3)
+        log.info("[reviewnote] 수집 완료 (총 %d건)", len(out))
+        return out

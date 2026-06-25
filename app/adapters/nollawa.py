@@ -1,0 +1,150 @@
+"""놀러와체험단(cometoplay.kr) 어댑터.
+
+item_list.php?category_id=...&page=N 형태로 페이징되는 서버 렌더링 목록을 파싱.
+카드 텍스트 예:
+  '[경기 의왕] 인기폭발... [오매기744] #태그 D-day 3 신청 0 명 / 모집 10 명'
+캠페인 식별자는 링크의 it_id.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from typing import List, Optional
+
+import httpx
+from bs4 import BeautifulSoup
+
+from .. import config
+from .base import BaseAdapter, Campaign, guess_region, guess_in, CATEGORIES
+
+BASE = "https://www.cometoplay.kr"
+# 크롤 대상 상위 카테고리: 001=지역(맛집/뷰티/숙박 등), 002=제품, 004=기자단
+CATS = ["001", "002", "004"]
+_ID_RE = re.compile(r"it_id=(\d+)")
+_DDAY_RE = re.compile(r"D-?day\s*(\d+)")
+_APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*명\s*/\s*모집\s*([\d,]+)\s*명")
+log = logging.getLogger(__name__)
+_IMG_ATTRS = ["data-src", "data-original", "data-lazy-src", "src"]
+
+
+def _to_int(s) -> Optional[int]:
+    try:
+        return int(str(s).replace(",", ""))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _card_node(anchor):
+    """앵커에서 위로 올라가며 '신청 X 명 / 모집 Y 명'이 1건인 가장 작은 조상(카드) 반환."""
+    node = anchor
+    for _ in range(6):
+        node = getattr(node, "parent", None)
+        if node is None:
+            break
+        if len(_APPLY_RE.findall(node.get_text(" ", strip=True))) == 1:
+            return node
+    return None
+
+
+def _pick_img(node) -> str:
+    if node is None:
+        return ""
+    for img in node.find_all("img"):
+        for attr in _IMG_ATTRS:
+            v = (img.get(attr) or "").strip()
+            if not v or "data:image" in v:
+                continue
+            if v.startswith("/"):
+                v = BASE + v
+            if "/skin/" in v:          # 로고·아이콘(scrap_ic/end_ico 등) 제외
+                continue
+            if v.startswith("http"):
+                return v
+    return ""
+
+
+def _parse_page(html: str) -> List[Campaign]:
+    soup = BeautifulSoup(html, "html.parser")
+    # 1) it_id별 썸네일 수집: 썸네일은 텍스트와 다른(이미지 전용) 앵커에 들어있다.
+    img_by_cid: dict = {}
+    for a in soup.select('a[href*="it_id="]'):
+        m = _ID_RE.search(a.get("href", ""))
+        if not m or m.group(1) in img_by_cid:
+            continue
+        im = _pick_img(a)
+        if im:
+            img_by_cid[m.group(1)] = im
+    # 2) 통계가 있는 앵커에서 캠페인 정보 추출
+    out, seen = [], set()
+    for a in soup.select('a[href*="it_id="]'):
+        txt = a.get_text(" ", strip=True)
+        am = _APPLY_RE.search(txt)
+        if not am:                     # 통계 없는 앵커(썸네일/찜 버튼) 건너뜀
+            continue
+        m = _ID_RE.search(a.get("href", ""))
+        if not m:
+            continue
+        cid = m.group(1)
+        if cid in seen:
+            continue
+        seen.add(cid)
+
+        title = txt
+        cut = title.find("D-day")
+        if cut < 0:
+            cut = title.find("D-Day")
+        if cut > 0:
+            title = title[:cut].strip()
+        title = re.sub(r"\s+", " ", title).strip()
+        if not title:
+            continue
+
+        url = f"{BASE}/item.php?it_id={cid}"
+        image = img_by_cid.get(cid, "") or _pick_img(_card_node(a))
+        dday = _to_int(mm.group(1)) if (mm := _DDAY_RE.search(txt)) else None
+        applicants, recruit = _to_int(am.group(1)), _to_int(am.group(2))
+        competition = round(applicants / recruit, 1) if recruit else None
+        out.append(Campaign(
+            site="nollawa", site_name="놀러와체험단", cid=cid, title=title, url=url,
+            region=guess_region(title), category=guess_in(txt, CATEGORIES),
+            channel="블로그",
+            dday=dday, applicants=applicants, recruit=recruit, competition=competition,
+            image=image, extra=(f"D-{dday}" if dday is not None else ""),
+        ))
+    return out
+
+
+class NollawaAdapter(BaseAdapter):
+    key = "nollawa"
+    name = "놀러와체험단"
+    enabled = True
+
+    async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
+        out, seen = [], set()
+        limit = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500  # 0=끝까지(상한 500)
+        log.info("[nollawa] 수집 시작...")
+        for cat in CATS:
+            for page in range(1, limit + 1):
+                url = (f"{BASE}/item_list.php?category_id={cat}"
+                       f"&sst=it_datetime&sod=desc&page={page}")
+                try:
+                    html = await self.get(client, url)
+                except Exception as e:
+                    log.warning("[nollawa] cat %s p%d 요청 실패: %s", cat, page, e)
+                    break
+                page_new = [c for c in _parse_page(html) if c.cid not in seen]
+                for c in page_new:
+                    seen.add(c.cid)
+                out.extend(page_new)
+                keep = True
+                if on_page and page_new:
+                    keep = on_page(page_new)
+                log.info("[nollawa] cat %s p%d +%d건 (누적 %d건)", cat, page, len(page_new), len(out))
+                if not page_new:
+                    break                      # 이 카테고리 마지막 페이지
+                if keep is False:
+                    break                      # 새 캠페인 없음 → 다음 카테고리로
+                await asyncio.sleep(0.3)
+        log.info("[nollawa] 수집 완료 (총 %d건)", len(out))
+        return out
