@@ -37,3 +37,7 @@ WEB_DEV_CHATID = os.getenv("WEB_DEV_CHATID", "").strip()
 
 # 디너의여왕 수집 최대 페이지 수 (1페이지 약 30건)
 DQ_MAX_PAGES = int(os.getenv("DQ_MAX_PAGES", "0"))  # 0 = 끝까지(자동 종료)
+
+# 웹 피드: 무한스크롤 1회 로드 개수, 필터링 시 훑을 최대 행 수
+FEED_PAGE = int(os.getenv("FEED_PAGE", "60"))
+FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "10000"))

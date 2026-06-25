@@ -103,7 +103,8 @@ class DinnerQueenAdapter(BaseAdapter):
             url = LIST_URL if page == 1 else f"{LIST_URL}&page={page}"
             try:
                 html = await self.get(client, url)
-            except Exception:
+            except Exception as e:
+                log.warning("[dinnerqueen] %d\ud398\uc774\uc9c0 \uc694\uccad \uc2e4\ud328(%s): %s", page, url, e)
                 break
             page_new = [c for c in _parse_page(html) if c.cid not in seen]
             for c in page_new:

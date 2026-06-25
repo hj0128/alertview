@@ -219,13 +219,25 @@ async def campaigns(request: Request):
             "max_competition": _num("maxcomp"),
             "max_dday": int(md) if md is not None else None,
         }
-        seen_until, viewed = "9999-99-99", set()
+        viewed = set()
     else:
         f = db.get_all_filters(uid)
-        seen_until = db.get_seen_until(uid)
         viewed = db.viewed_set(uid)
-    out, new_count = [], 0
-    for r in db.list_recent(300):
+
+    # 페이지네이션 파라미터(무한스크롤)
+    try:
+        offset = max(0, int(request.query_params.get("offset", 0)))
+    except ValueError:
+        offset = 0
+    try:
+        limit = int(request.query_params.get("limit", config.FEED_PAGE))
+    except ValueError:
+        limit = config.FEED_PAGE
+    limit = max(1, min(limit, 200))
+
+    today = time.strftime("%Y-%m-%d")  # '오늘' 올라온 캠페인 = NEW
+    matched, new_count = [], 0
+    for r in db.list_recent(config.FEED_SCAN_MAX):
         c = Campaign(
             site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
             url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
@@ -235,17 +247,21 @@ async def campaigns(request: Request):
         if not matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
                        f["max_competition"], f["max_dday"]):
             continue
-        is_new = ((r["first_seen"] or "") > seen_until) and ((r["site"], r["cid"]) not in viewed)
+        is_new = (r["first_seen"] or "").startswith(today)   # 오늘 수집분 = NEW(읽음 여부 무관)
+        is_viewed = (r["site"], r["cid"]) in viewed          # 클릭(확인)했으면 읽음 → 연하게
         if is_new:
             new_count += 1
-        out.append({
+        matched.append({
             "site": r["site"], "cid": r["cid"], "title": c.title, "url": c.url,
             "region": c.region, "category": c.category, "channel": c.channel,
             "dday": c.dday, "competition": c.competition,
             "applicants": c.applicants, "recruit": c.recruit,
-            "image": r["image"] if "image" in r.keys() else "", "is_new": is_new,
+            "image": r["image"] if "image" in r.keys() else "",
+            "is_new": is_new, "is_viewed": is_viewed,
         })
-    return {"campaigns": out, "new_count": new_count, "total": len(out)}
+    page = matched[offset:offset + limit]
+    return {"campaigns": page, "new_count": new_count, "total": len(matched),
+            "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
 
 
 @app.post("/api/view")
@@ -263,11 +279,12 @@ async def view(request: Request):
 
 @app.post("/api/seen-all")
 async def seen_all(request: Request):
-    """모두 확인 → 현재까지 전부 NEW 해제."""
+    """모두 읽음 → 수집된 캠페인 전체를 읽음(연하게) 처리."""
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    db.mark_all_seen(uid)
+    rows = db.list_recent(config.FEED_SCAN_MAX)
+    db.mark_viewed_many(uid, [(r["site"], r["cid"]) for r in rows])
     return {"ok": True}
 
 
@@ -356,7 +373,6 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
  .pill{font-size:10.5px;background:#f1f3f7;color:#566;border-radius:6px;padding:2px 6px}
  .pill.good{background:#e4f7e6;color:#1b7a2e;font-weight:700}
- .item.viewed .badge{display:none}
  .badge{position:absolute;top:6px;left:6px;background:#ff3b30;color:#fff;font-size:10px;font-weight:700;border-radius:7px;padding:2px 7px;z-index:1}
  .seenbtn{background:#eef2fb;color:#2d4373;padding:7px 12px;font-weight:600}
  .num{display:flex;align-items:center;gap:8px;margin-bottom:10px}
@@ -430,7 +446,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 </div>
 <div class=card>
   <div class=top><h2 style="margin:0">📋 캠페인 <span id=cnt class=muted></span></h2>
-    <button class=seenbtn onclick="seenAll()">모두 확인</button></div>
+    <button class=seenbtn onclick="seenAll()">모두 읽음</button></div>
   <div id=feedwrap><div id=feed></div></div>
 </div>
 </main>
@@ -448,28 +464,41 @@ async function load(){
 }
 function refreshLocal(){ render(); loadCampaigns(); }   // 게스트: 서버 저장 없이 화면만 갱신
 function toggleArr(arr,v){const i=arr.indexOf(v); if(i>=0)arr.splice(i,1); else arr.push(v);}
-async function loadCampaigns(){
-  let url='/api/campaigns';
+let feedOffset=0, feedTotal=0, feedLoading=false, feedDone=false;
+function feedParams(){
+  const p=new URLSearchParams();
   if(guest){
-    const p=new URLSearchParams();
     if(S.keywords.length)p.set('kw',S.keywords.join(','));
     if(S.regions.length)p.set('region',S.regions.join(','));
     if(S.categories.length)p.set('cat',S.categories.join(','));
     if(S.channels.length)p.set('ch',S.channels.join(','));
     if(S.max_competition!=null)p.set('maxcomp',S.max_competition);
     if(S.max_dday!=null)p.set('maxdday',S.max_dday);
-    const qs=p.toString(); if(qs)url+='?'+qs;
   }
-  const r=await fetch(url); if(r.status===401){return;}
-  renderFeed(await r.json());
+  return p;
+}
+async function loadCampaigns(reset=true){
+  if(feedLoading)return; feedLoading=true;
+  if(reset){feedOffset=0; feedDone=false; document.getElementById('feed').innerHTML='';}
+  const p=feedParams(); p.set('offset',feedOffset); p.set('limit',60);
+  const r=await fetch('/api/campaigns?'+p.toString());
+  if(r.status===401){feedLoading=false;return;}
+  const d=await r.json();
+  feedTotal=d.total;
+  document.getElementById('cnt').textContent='\u00b7 '+d.total+'\uac1c'+(d.new_count?(' (NEW '+d.new_count+')'):'');
+  appendFeed(d.campaigns);
+  feedOffset+=d.campaigns.length;
+  feedDone=!d.has_more;
+  if(reset && !d.campaigns.length){
+    document.getElementById('feed').innerHTML='<p class=muted style="grid-column:1/-1">\uc870\uac74\uc5d0 \ub9de\ub294 \ucea0\ud398\uc778\uc774 \uc544\uc9c1 \uc5c6\uc5b4\uc694.</p>';
+  }
+  feedLoading=false;
 }
 function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
-function renderFeed(d){
-  document.getElementById('cnt').textContent = d.new_count ? ('\u00b7 NEW '+d.new_count) : ('\u00b7 '+d.total+'\uac1c');
-  const f=document.getElementById('feed'); f.innerHTML='';
-  if(!d.campaigns.length){f.innerHTML='<p class=muted style="grid-column:1/-1">\uc870\uac74\uc5d0 \ub9de\ub294 \ucea0\ud398\uc778\uc774 \uc544\uc9c1 \uc5c6\uc5b4\uc694.</p>';return;}
-  d.campaigns.forEach(c=>{
-    const a=document.createElement('a'); a.className='item'+(c.is_new?'':' viewed');
+function appendFeed(arr){
+  const f=document.getElementById('feed');
+  arr.forEach(c=>{
+    const a=document.createElement('a'); a.className='item'+(c.is_viewed?' viewed':'');
     a.href=c.url; a.target='_blank'; a.rel='noopener';
     const meta=[c.region,c.category,c.channel].filter(Boolean).join(' \u00b7 ');
     let pills='';
@@ -492,12 +521,16 @@ function renderFeed(d){
 function makePh(){const d=document.createElement('div');d.className='thumb ph';d.textContent='🍽️';return d;}
 async function markView(site,cid,el){
   if(el.classList.contains('viewed'))return;
-  el.classList.add('viewed'); const b=el.querySelector('.badge'); if(b)b.remove();
-  const cnt=document.getElementById('cnt'); const m=cnt.textContent.match(/NEW (\\d+)/);
-  if(m){const n=parseInt(m[1])-1; cnt.textContent=n>0?('· NEW '+n):'';}
-  fetch('/api/view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({site,cid})});
+  el.classList.add('viewed');               // \uc77d\uc74c
+  if(!guest) fetch('/api/view',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({site,cid})});
 }
-async function seenAll(){await fetch('/api/seen-all',{method:'POST'});await loadCampaigns();}
+async function seenAll(){await fetch('/api/seen-all',{method:'POST'});await loadCampaigns(true);}
+(function(){const w=document.getElementById('feedwrap'); if(!w)return;
+  w.addEventListener('scroll',function(){
+    if(feedLoading||feedDone)return;
+    if(w.scrollTop+w.clientHeight>=w.scrollHeight-120) loadCampaigns(false);
+  });
+})();
 function chips(elId,arr,delFn){
   const c=document.getElementById(elId); c.innerHTML='';
   if(!arr.length){c.innerHTML='<span class=muted>아직 없음 (없으면 전체 수신)</span>';return;}
@@ -557,5 +590,6 @@ async function preset(kind){
   await load();
 }
 load();
-setInterval(loadCampaigns, 20000);  // 수집되는 대로 자동 갱신
+setInterval(function(){const w=document.getElementById('feedwrap');
+  if(w && w.scrollTop<60) loadCampaigns(true);}, 20000);
 </script></body></html>"""

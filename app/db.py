@@ -224,6 +224,21 @@ def mark_viewed(chat_id: int, site: str, cid: str) -> None:
         _c().commit()
 
 
+def mark_viewed_many(chat_id: int, pairs) -> None:
+    """여러 캠페인을 한 번에 '읽음'으로 표시('모두 읽음')."""
+    pairs = list(pairs)
+    if not pairs:
+        return
+    with _lock:
+        cur = _c().cursor()
+        cur.executemany(
+            _q("INSERT INTO viewed(chat_id, site, cid) VALUES(?,?,?) ON CONFLICT DO NOTHING"),
+            [(chat_id, s, c) for (s, c) in pairs],
+        )
+        _c().commit()
+        cur.close()
+
+
 def viewed_set(chat_id: int) -> set:
     with _lock:
         rows = _c().execute(_q("SELECT site, cid FROM viewed WHERE chat_id=?"),
