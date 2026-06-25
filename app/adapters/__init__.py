@@ -9,6 +9,9 @@ from .reviewplace import ReviewPlaceAdapter
 from .mrblog import MrblogAdapter
 from .reviewnote import ReviewNoteAdapter
 from .gangnam import GangnamAdapter
+from .seoulouba import SeouloubaAdapter
+from .assaview import AssaviewAdapter
+from .ringble import RingbleAdapter
 from .demo import DemoAdapter
 from .stubs import RevuAdapter
 
@@ -19,6 +22,9 @@ ALL_ADAPTERS = [
     MrblogAdapter(),
     ReviewNoteAdapter(),
     GangnamAdapter(),
+    SeouloubaAdapter(),
+    AssaviewAdapter(),
+    RingbleAdapter(),
     RevuAdapter(),
 ]
 
