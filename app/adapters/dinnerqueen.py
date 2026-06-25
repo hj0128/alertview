@@ -12,8 +12,8 @@ from bs4 import BeautifulSoup
 from .. import config
 from .base import BaseAdapter, Campaign, guess_region, guess_in, CHANNELS, CATEGORIES
 
-BASE = "https://dinnerqueen.net/taste?ct=전체"
-LIST_URL = f"{BASE}/taste"
+BASE = "https://dinnerqueen.net"
+LIST_URL = f"{BASE}/taste?ct=전체"
 _ID_RE = re.compile(r"/taste/(\d+)")
 _APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*/\s*모집\s*([\d,]+)")
 _DDAY_RE = re.compile(r"D-(\d+)")
@@ -100,7 +100,7 @@ class DinnerQueenAdapter(BaseAdapter):
         limit = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500  # 0=끝까지(안전상한 500)
         log.info("[dinnerqueen] 수집 시작...")
         for page in range(1, limit + 1):
-            url = LIST_URL if page == 1 else f"{LIST_URL}?page={page}"
+            url = LIST_URL if page == 1 else f"{LIST_URL}&page={page}"
             try:
                 html = await self.get(client, url)
             except Exception:
