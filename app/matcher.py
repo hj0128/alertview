@@ -40,6 +40,10 @@ CATEGORY_KEYWORDS = {
 }
 
 
+# 표준 카테고리 집합(8종). 어댑터가 준 값이 이 안에 있으면 그대로 신뢰, 아니면 classify.
+CANONICAL = set(CATEGORY_KEYWORDS) | {"기타"}
+
+
 def classify(text: str) -> str:
     """텍스트를 표준 카테고리 하나로 분류. 어떤 키워드에도 안 걸리면 '기타'.
     (사전 순서가 우선순위 - 맛집 > 뷰티 > 여가 > 배송 > 배달 > 페이백 > 기자단)"""
@@ -49,18 +53,11 @@ def classify(text: str) -> str:
     return "기타"
 
 
-def _category_hit(text: str, selected: List[str]) -> bool:
-    """선택한 카테고리 중 하나라도 텍스트에 (동의어 포함) 걸리면 True.
-    '기타'는 다른 어떤 카테고리에도 안 걸리는 경우."""
-    for sel in selected:
-        if sel == "기타":
-            if classify(text) == "기타":
-                return True
-            continue
-        for kw in CATEGORY_KEYWORDS.get(sel, [sel]):
-            if kw in text:
-                return True
-    return False
+def category_of(stored: str, text: str) -> str:
+    """캠페인의 표준 카테고리. 저장값(어댑터/DB)이 표준 8종이면 그대로 신뢰,
+    아니면(빈값·'여행'·'식품'…) 텍스트로 분류. 표시·필터가 같은 기준을 쓰게 하는 단일 진실."""
+    s = (stored or "").strip()
+    return s if s in CANONICAL else classify(text)
 
 
 def matches(
@@ -85,7 +82,7 @@ def matches(
         reg = c.region or ""
         if not any(reg == r or reg.startswith(r + " ") for r in regions):
             return False
-    if categories and not _category_hit(text, categories):
+    if categories and category_of(c.category, text) not in categories:
         return False
     if channels and not any(ch in text for ch in channels):
         return False

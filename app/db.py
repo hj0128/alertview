@@ -417,6 +417,10 @@ def record_campaign(c) -> None:
     region = normalize_offline(raw_region) if raw_region else ""
     if not region and raw_region:
         region = region_cache_get(raw_region) or ""
+    # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로, 아니면(빈값·'여행'·'식품'…) 키워드로 분류.
+    from .matcher import classify, CANONICAL
+    category = c.category if c.category in CANONICAL else \
+        classify(" ".join([c.title or "", c.category or "", c.channel or ""]))
     with _lock:
         _c().execute(_q(
             "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "
@@ -432,7 +436,7 @@ def record_campaign(c) -> None:
             "competition=COALESCE(excluded.competition, seen.competition), "
             "image=COALESCE(NULLIF(excluded.image, ''), seen.image), "
             "deadline=COALESCE(excluded.deadline, seen.deadline)"),
-            (c.site, c.cid, c.title, c.url, region, raw_region, c.category, c.channel,
+            (c.site, c.cid, c.title, c.url, region, raw_region, category, c.channel,
              c.dday, c.applicants, c.recruit, c.competition, getattr(c, "image", ""),
              deadline, _now()),
         )

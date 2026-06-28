@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, config
-from .matcher import matches, classify
+from .matcher import matches, category_of
 from .adapters import ALL_ADAPTERS
 from .adapters.base import Campaign
 
@@ -303,7 +303,7 @@ async def campaigns(request: Request):
         return {
             "site": r["site"], "site_name": _SITE_NAMES.get(r["site"], r["site"]),
             "cid": r["cid"], "title": r["title"] or "", "url": r["url"] or "",
-            "region": r["region"] or "", "category": classify(cat_txt),
+            "region": r["region"] or "", "category": category_of(r["category"], cat_txt),
             "channel": r["channel"] or "", "dday": _live_dday(r),
             "competition": r["competition"], "applicants": r["applicants"], "recruit": r["recruit"],
             "image": r["image"] if "image" in r.keys() else "",

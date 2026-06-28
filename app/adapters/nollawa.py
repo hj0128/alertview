@@ -20,8 +20,23 @@ from .. import config
 from .base import BaseAdapter, Campaign, guess_region, guess_in, CATEGORIES
 
 BASE = "https://www.cometoplay.kr"
-# 크롤 대상 상위 카테고리: 001=지역(맛집/뷰티/숙박 등), 002=제품, 004=기자단
-CATS = ["001", "002", "004"]
+# 사이트의 실제 서브카테고리(category_id)로 크롤 → 사이트 분류를 그대로 사용(추측 X).
+# (category_id, 우리 표준 카테고리). 001=지역, 002=제품, 004=기자단.
+CATS = [
+    ("001012", "맛집"),
+    ("001013", "뷰티"),
+    ("001014", "여가"),    # 숙박
+    ("001015", "여가"),    # 문화
+    ("001016", "배달"),
+    ("001017", "기타"),    # 지역-기타
+    ("002006", "배송"),    # 생활
+    ("002007", "배송"),    # 디지털
+    ("002008", "배송"),    # 패션
+    ("002009", "뷰티"),    # 제품-뷰티
+    ("002010", "배송"),    # 식품
+    ("002011", "기타"),    # 제품-기타
+    ("004", "기자단"),
+]
 _ID_RE = re.compile(r"it_id=(\d+)")
 _DDAY_RE = re.compile(r"D-?day\s*(\d+)")
 _APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*명\s*/\s*모집\s*([\d,]+)\s*명")
@@ -66,7 +81,7 @@ def _pick_img(node) -> str:
     return ""
 
 
-def _parse_page(html: str) -> List[Campaign]:
+def _parse_page(html: str, category: str = "") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     # 1) it_id별 썸네일 수집: 썸네일은 텍스트와 다른(이미지 전용) 앵커에 들어있다.
     img_by_cid: dict = {}
@@ -109,7 +124,7 @@ def _parse_page(html: str) -> List[Campaign]:
         competition = round(applicants / recruit, 1) if recruit else None
         out.append(Campaign(
             site="nollawa", site_name="놀러와체험단", cid=cid, title=title, url=url,
-            region=guess_region(title), category=guess_in(txt, CATEGORIES),
+            region=guess_region(title), category=category,
             channel="블로그",
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
@@ -126,24 +141,25 @@ class NollawaAdapter(BaseAdapter):
         out, seen = [], set()
         limit = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500  # 0=끝까지(상한 500)
         log.info("[nollawa] 수집 시작...")
-        for cat in CATS:
+        for cat_id, category in CATS:
             for page in range(1, limit + 1):
-                url = (f"{BASE}/item_list.php?category_id={cat}"
+                url = (f"{BASE}/item_list.php?category_id={cat_id}"
                        f"&sst=it_datetime&sod=desc&page={page}")
                 try:
                     html = await self.get(client, url)
                 except Exception as e:
                     # 부분 수집을 '완료'로 오인하지 않도록 중단하지 말고 전파(다음 수집에서 재시도)
-                    log.warning("[nollawa] cat %s p%d 요청 실패(중단): %s", cat, page, e)
+                    log.warning("[nollawa] cat %s p%d 요청 실패(중단): %s", cat_id, page, e)
                     raise
-                page_new = [c for c in _parse_page(html) if c.cid not in seen]
+                page_new = [c for c in _parse_page(html, category) if c.cid not in seen]
                 for c in page_new:
                     seen.add(c.cid)
                 out.extend(page_new)
                 keep = True
                 if on_page and page_new:
                     keep = on_page(page_new)
-                log.info("[nollawa] cat %s p%d +%d건 (누적 %d건)", cat, page, len(page_new), len(out))
+                log.info("[nollawa] cat %s(%s) p%d +%d건 (누적 %d건)",
+                         cat_id, category, page, len(page_new), len(out))
                 if not page_new:
                     break                      # 이 카테고리 마지막 페이지
                 if keep is False:
