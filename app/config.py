@@ -52,3 +52,7 @@ KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
 # 웹 피드: 무한스크롤 1회 로드 개수, 필터링 시 훑을 최대 행 수
 FEED_PAGE = int(os.getenv("FEED_PAGE", "60"))
 FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "20000"))
+
+# 종료(마감) 캠페인 정리: 피드에선 마감일 지나면 즉시 숨기고, 마감 후 이 일수가
+# 지나면 DB 에서 삭제(유예). 0 이면 삭제 안 함(숨기기만).
+PURGE_GRACE_DAYS = int(os.getenv("PURGE_GRACE_DAYS", "3"))

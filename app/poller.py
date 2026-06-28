@@ -135,6 +135,10 @@ async def _kakao_backfill() -> None:
 
 async def run_poll(bot, demo: bool) -> None:
     new_items = await collect_new(demo)
+    if config.PURGE_GRACE_DAYS > 0:
+        purged = db.purge_expired(config.PURGE_GRACE_DAYS)
+        if purged:
+            log.info("마감 %d일 지난 캠페인 %d건 삭제", config.PURGE_GRACE_DAYS, purged)
     await _check_mrblog_cookie(bot, demo)
     await _kakao_backfill()
     if new_items:

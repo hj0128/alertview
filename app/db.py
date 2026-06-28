@@ -439,27 +439,51 @@ def record_campaign(c) -> None:
         _c().commit()
 
 
+# 피드 노출 조건: 마감 지난 건 숨김(마감일 미상은 유지). deadline 은 'YYYY-MM-DD' 문자열이라
+# 같은 형식의 오늘 날짜와 사전식 비교 = 날짜 비교(PG/SQLite 공통).
+_ACTIVE = "(deadline IS NULL OR deadline >= ?)"
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d")
+
+
 def list_recent(limit: int = 200) -> List[dict]:
-    """최근 수집 캠페인(최신순). 피드/필터 표시에 사용."""
+    """최근 수집 캠페인(최신순, 활성만=마감 안 지난 것). 피드/필터 표시에 사용."""
     with _lock:
         rows = _c().execute(_q(
-            f"SELECT * FROM seen ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ?"),
-            (limit,)).fetchall()
+            f"SELECT * FROM seen WHERE {_ACTIVE} "
+            f"ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ?"),
+            (_today(), limit)).fetchall()
     return [dict(r) for r in rows]
 
 
 def list_page(offset: int, limit: int) -> List[dict]:
-    """최신순 페이지(필터 없을 때 DB 레벨 페이지네이션용)."""
+    """최신순 페이지(필터 없을 때 DB 레벨 페이지네이션용, 활성만)."""
     with _lock:
         rows = _c().execute(_q(
-            f"SELECT * FROM seen ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ? OFFSET ?"),
-            (limit, offset)).fetchall()
+            f"SELECT * FROM seen WHERE {_ACTIVE} "
+            f"ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ? OFFSET ?"),
+            (_today(), limit, offset)).fetchall()
     return [dict(r) for r in rows]
 
 
 def count_seen() -> int:
+    """피드에 보이는(활성) 캠페인 수."""
     with _lock:
-        return _c().execute("SELECT COUNT(*) AS n FROM seen").fetchone()["n"]
+        return _c().execute(_q(f"SELECT COUNT(*) AS n FROM seen WHERE {_ACTIVE}"),
+                            (_today(),)).fetchone()["n"]
+
+
+def purge_expired(grace_days: int = 3) -> int:
+    """마감 후 grace_days 가 지난 캠페인을 DB 에서 삭제. 반환: 삭제 건수.
+    (마감일 미상은 보존. grace_days 동안은 피드에선 숨겨지지만 DB 엔 남아 유예.)"""
+    cutoff = (datetime.date.today() - datetime.timedelta(days=grace_days)).isoformat()
+    with _lock:
+        cur = _c().execute(_q(
+            "DELETE FROM seen WHERE deadline IS NOT NULL AND deadline < ?"), (cutoff,))
+        _c().commit()
+        return cur.rowcount
 
 
 def count_seen_new(date_prefix: str) -> int:
