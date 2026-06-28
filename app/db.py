@@ -502,11 +502,12 @@ def list_recent(limit: int = 200) -> List[dict]:
 def _order_by(sort: str) -> str:
     """정렬 ORDER BY 절. (deadline IS NULL) 은 PG/SQLite 모두 비널 먼저(NULLS LAST 효과)."""
     tb = _tiebreak()
-    if sort == "deadline":      # 마감 임박순
+    if sort == "deadline":      # 마감 임박순: D-day 적게 남은 것 먼저
         return f"(deadline IS NULL), deadline ASC, {tb} DESC"
     if sort == "competition":   # 경쟁률 낮은순
         return f"(competition IS NULL), competition ASC, {tb} DESC"
-    return f"first_seen DESC, {tb} DESC"   # recent(기본): 최신순
+    # recent(기본=최신순): D-day 많이 남은 것 먼저(마감 늦은 순)
+    return f"(deadline IS NULL), deadline DESC, {tb} DESC"
 
 
 def list_page(offset: int, limit: int, sort: str = "recent") -> List[dict]:

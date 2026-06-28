@@ -319,11 +319,14 @@ async def campaigns(request: Request):
         }
 
     def _sort(items):
-        if sort == "deadline":      # 마감 임박순(미상은 뒤로)
+        if sort == "deadline":      # 마감 임박순: D-day 적게 남은 것 먼저(미상은 뒤로)
             items.sort(key=lambda d: (d["dday"] is None, d["dday"] if d["dday"] is not None else 0))
         elif sort == "competition":  # 경쟁률 낮은순(미상은 뒤로)
             items.sort(key=lambda d: (d["competition"] is None,
                                       d["competition"] if d["competition"] is not None else 0))
+        else:                        # 최신순: D-day 많이 남은 것 먼저(미상은 뒤로)
+            items.sort(key=lambda d: (d["dday"] is None,
+                                      -(d["dday"] if d["dday"] is not None else 0)))
         return items
 
     if fav_only:
