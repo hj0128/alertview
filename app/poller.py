@@ -17,14 +17,16 @@ log = logging.getLogger(__name__)
 
 async def collect_new(demo: bool) -> List[Campaign]:
     """페이지가 들어오는 즉시 DB 저장(점진적 표시).
-    첫 수집: 전부 저장하되 알림 생략, 끝까지. 이후: 새 캠페인 없는 페이지에서 조기 종료."""
+    전체 백필(deep): 전부 저장하되 알림 생략, 끝까지 크롤. 백필이 '정상 완료'된 뒤부터
+    증분 모드(새 캠페인 없는 페이지에서 조기 종료, 신규는 알림). 백필이 중간에 끊기면
+    (앱 재시작/요청 오류 등) 완료 플래그가 안 찍혀 다음 수집에서 다시 전체 크롤 → 구멍 자가 치유."""
     new_items: List[Campaign] = []
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         for ad in active_adapters(demo):
-            first_time = db.seen_count(ad.key) == 0
+            deep = not db.backfill_done(ad.key)   # 백필 미완료면 전체 크롤(알림 억제)
             stats = {"fresh": 0}
 
-            def on_page(items, ad=ad, first_time=first_time, stats=stats) -> bool:
+            def on_page(items, ad=ad, deep=deep, stats=stats) -> bool:
                 db_new = 0
                 for c in items:
                     seen = db.is_seen(c.site, c.cid)
@@ -33,17 +35,21 @@ async def collect_new(demo: bool) -> List[Campaign]:
                         continue                   # 이미 본 건: 갱신만 하고 신규 카운트 제외
                     stats["fresh"] += 1
                     db_new += 1
-                    if not first_time:
+                    if not deep:
                         new_items.append(c)
-                return True if first_time else (db_new > 0)
+                return True if deep else (db_new > 0)
 
             try:
                 await ad.fetch(client, on_page=on_page)
             except Exception as e:
-                log.warning("[%s] fetch 실패: %s", ad.key, e)
+                # 백필이 끝까지 못 감 → 완료 플래그 미설정 → 다음 수집에서 재시도(자가 치유)
+                log.warning("[%s] fetch 실패%s: %s",
+                            ad.key, " (백필 미완료 → 다음 수집에 재시도)" if deep else "", e)
                 continue
+            if deep and not getattr(ad, "partial", False):
+                db.set_backfill_done(ad.key)       # 전체 크롤 정상 완료 → 이후 증분 모드
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
-                     " (첫 수집: 알림생략)" if first_time else "")
+                     " (전체 백필: 알림생략)" if deep else "")
     return new_items
 
 
@@ -107,6 +113,11 @@ async def _kakao_backfill() -> None:
                     else:
                         log.warning("[kakao] HTTP %s ('%s')", r.status_code, raw)
                         continue            # 일시 오류는 캐시하지 않음(다음에 재시도)
+                except httpx.ConnectError as e:
+                    # DNS 해석/연결 실패(컨테이너 외부망 일시 단절). 남은 항목도 다 실패하므로
+                    # 이번 주기 즉시 중단(실패는 캐시 안 함 → 다음 주기 자동 재시도).
+                    log.warning("[kakao] 네트워크/DNS 오류(%s) → 이번 주기 중단", e)
+                    return
                 except Exception as e:
                     log.warning("[kakao] '%s' 지오코딩 실패: %s", raw, e)
                     continue

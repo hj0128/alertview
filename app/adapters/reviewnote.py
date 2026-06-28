@@ -91,13 +91,12 @@ class ReviewNoteAdapter(BaseAdapter):
         for page in range(0, cap):
             try:
                 r = await client.get(API.format(page=page), headers=headers, timeout=20.0)
-                if r.status_code != 200:
-                    log.warning("[reviewnote] page=%d HTTP %s → 중단", page, r.status_code)
-                    break
+                r.raise_for_status()
                 j = r.json()
             except Exception as e:
-                log.warning("[reviewnote] page=%d 요청 실패: %s", page, e)
-                break
+                # 부분 수집을 '완료'로 오인하지 않도록 전파(다음 수집에서 재시도)
+                log.warning("[reviewnote] page=%d 요청 실패(중단): %s", page, e)
+                raise
             d = j.get("data") if isinstance(j.get("data"), dict) else j
             objs = d.get("objects") or []
             if not objs:

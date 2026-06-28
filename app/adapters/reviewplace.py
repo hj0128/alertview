@@ -145,8 +145,8 @@ class ReviewPlaceAdapter(BaseAdapter):
                     resp.raise_for_status()
                     html = resp.text
                 except Exception as e:
-                    log.warning("[reviewplace] %s start=%d 요청 실패: %s", typ, start, e)
-                    break
+                    log.warning("[reviewplace] %s start=%d 요청 실패(중단): %s", typ, start, e)
+                    raise
                 page_new = [c for c in _parse(html, defcat) if c.cid not in seen]
                 for c in page_new:
                     seen.add(c.cid)

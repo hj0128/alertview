@@ -113,11 +113,10 @@ class GangnamAdapter(BaseAdapter):
         start = 0
         for _ in range(cap):
             try:
-                html = (await client.get(TPL.format(start=start, cnt=PAGE),
-                                         headers=headers, timeout=20.0)).text
+                html = await self.get(client, TPL.format(start=start, cnt=PAGE), headers=headers)
             except Exception as e:
-                log.warning("[gangnam] start=%d 요청 실패: %s", start, e)
-                break
+                log.warning("[gangnam] start=%d 요청 실패(중단): %s", start, e)
+                raise
             cards = _parse(html)
             if not cards:
                 break

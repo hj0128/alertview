@@ -133,6 +133,11 @@ def _create_schema() -> None:
             raw TEXT PRIMARY KEY, norm TEXT
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS meta (
+            key TEXT PRIMARY KEY, value TEXT
+        )
+        """,
     ]
     for s in stmts:
         _conn.execute(s)
@@ -366,6 +371,30 @@ def seen_count(site: str) -> int:
         row = _c().execute(_q("SELECT COUNT(*) AS n FROM seen WHERE site=?"),
                            (site,)).fetchone()
     return row["n"]
+
+
+def meta_get(key: str) -> Optional[str]:
+    with _lock:
+        row = _c().execute(_q("SELECT value FROM meta WHERE key=?"), (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def meta_set(key: str, value: str) -> None:
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO meta(key, value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value"), (key, value))
+        _c().commit()
+
+
+def backfill_done(site: str) -> bool:
+    """해당 사이트의 '첫 전체 수집(백필)'이 끝까지 정상 완료됐는지 여부.
+    완료 전(또는 중간에 끊김)에는 매 수집을 전체 크롤로 돌려 구멍을 메운다."""
+    return meta_get(f"backfill_done:{site}") == "1"
+
+
+def set_backfill_done(site: str) -> None:
+    meta_set(f"backfill_done:{site}", "1")
 
 
 def is_seen(site: str, cid: str) -> bool:

@@ -118,15 +118,18 @@ class MrblogAdapter(BaseAdapter):
     name = "미블"
     enabled = True
     cookie_expired = False     # 폴러가 읽어 관리자에게 만료 알림을 보낸다
+    partial = False            # 부분 수집(쿠키만료 폴백 등) → 폴러가 백필 완료로 찍지 않음
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         """MRBLOG_COOKIE 가 있으면 로그인 세션으로 전체 목록을, 없으면 홈 공개분만 수집."""
         self.cookie_expired = False
+        self.partial = False
         if config.MRBLOG_COOKIE:
             items = await self._fetch_auth(client, on_page)
             if items is not None:
                 return items
-            # None = 쿠키 만료/실패 → 홈 폴백
+            # None = 쿠키 만료/실패 → 홈 폴백(전체가 아니므로 백필 미완료로 표시)
+            self.partial = True
         return await self._fetch_home(client, on_page)
 
     async def _fetch_home(self, client, on_page) -> List[Campaign]:
@@ -173,7 +176,9 @@ class MrblogAdapter(BaseAdapter):
                 resp = await client.get(XHR.format(page=page), headers=headers, timeout=20.0)
                 data = resp.json()
             except Exception as e:
-                log.warning("[mrblog] page=%d 요청 실패: %s", page, e)
+                # 부분 수집을 '완료'로 오인하지 않도록 표시(다음 수집에서 전체 재시도)
+                log.warning("[mrblog] page=%d 요청 실패(중단): %s", page, e)
+                self.partial = True
                 break
             if not data.get("count"):
                 break                          # 마지막 페이지

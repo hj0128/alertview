@@ -121,10 +121,10 @@ class AssaviewAdapter(BaseAdapter):
         log.info("[assaview] 수집 시작...")
         for page in range(1, cap + 1):
             try:
-                html = (await client.get(LIST.format(page=page), headers=headers, timeout=20.0)).text
+                html = await self.get(client, LIST.format(page=page), headers=headers)
             except Exception as e:
-                log.warning("[assaview] %d페이지 요청 실패: %s", page, e)
-                break
+                log.warning("[assaview] %d페이지 요청 실패(중단): %s", page, e)
+                raise
             cards = _parse(html)
             if not cards:
                 break

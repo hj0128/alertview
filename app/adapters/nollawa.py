@@ -131,8 +131,9 @@ class NollawaAdapter(BaseAdapter):
                 try:
                     html = await self.get(client, url)
                 except Exception as e:
-                    log.warning("[nollawa] cat %s p%d 요청 실패: %s", cat, page, e)
-                    break
+                    # 부분 수집을 '완료'로 오인하지 않도록 중단하지 말고 전파(다음 수집에서 재시도)
+                    log.warning("[nollawa] cat %s p%d 요청 실패(중단): %s", cat, page, e)
+                    raise
                 page_new = [c for c in _parse_page(html) if c.cid not in seen]
                 for c in page_new:
                     seen.add(c.cid)
