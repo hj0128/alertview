@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import hmac
+import json
 import time
 
 from fastapi import FastAPI, Request
@@ -119,10 +120,17 @@ async def state(request: Request):
             "region_tree": region_tree,
         }
     f = db.get_all_filters(uid)
+    presets = []
+    for p in db.list_presets(uid):
+        try:
+            presets.append({"name": p["name"], "payload": json.loads(p["payload"] or "{}")})
+        except (ValueError, TypeError):
+            pass
     return {
         "logged_in": True,
         "active": db.is_active(uid),
         "name": request.session.get("name", ""),
+        "presets": presets,
         "sites": f["sites"],
         "keywords": f["keywords"],
         "regions": f["regions"],
@@ -236,6 +244,68 @@ async def clear(request: Request):
         db.clear_filters(uid, t)
     else:
         return JSONResponse({"error": "bad type"}, status_code=400)
+    return {"ok": True}
+
+
+# 저장된 검색조건(프리셋): payload 키 ↔ filters 테이블 ftype
+_PRESET_KEYS = ("sites", "keywords", "regions", "categories", "channels")
+_PRESET_FTYPE = {"sites": "site", "keywords": "keyword", "regions": "region",
+                 "categories": "category", "channels": "channel"}
+
+
+def _normalize_payload(p: dict) -> dict:
+    out = {}
+    for k in _PRESET_KEYS:
+        vals = p.get(k) or []
+        out[k] = [str(x).strip() for x in vals if str(x).strip()][:50]
+    for k in ("max_competition", "max_dday"):
+        v = p.get(k)
+        out[k] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    return out
+
+
+@app.post("/api/preset/save")
+async def preset_save(request: Request):
+    """현재(또는 전달된) 검색조건을 이름 붙여 저장."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    b = await request.json()
+    name = (b.get("name") or "").strip()[:40]
+    if not name:
+        return JSONResponse({"error": "no name"}, status_code=400)
+    payload = _normalize_payload(b.get("payload") or {})
+    db.save_preset(uid, name, json.dumps(payload, ensure_ascii=False))
+    return {"ok": True}
+
+
+@app.post("/api/preset/apply")
+async def preset_apply(request: Request):
+    """저장된 조건을 현재 필터로 적용(기존 필터는 교체)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    name = ((await request.json()).get("name") or "").strip()
+    raw = next((p["payload"] for p in db.list_presets(uid) if p["name"] == name), None)
+    if raw is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    payload = _normalize_payload(json.loads(raw or "{}"))
+    db.clear_filters(uid)
+    for k in _PRESET_KEYS:
+        for v in payload[k]:
+            db.add_filter(uid, _PRESET_FTYPE[k], v)
+    for k in ("max_competition", "max_dday"):
+        if payload[k] is not None:
+            db.set_scalar(uid, k, payload[k])
+    return {"ok": True}
+
+
+@app.post("/api/preset/delete")
+async def preset_delete(request: Request):
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    db.delete_preset(uid, ((await request.json()).get("name") or "").strip())
     return {"ok": True}
 
 
@@ -563,6 +633,10 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  #favtgl.on{background:#ffe3e6;color:#e0354b}
  .clearbtn{font-size:12px;font-weight:600;color:#e0354b;background:#ffe3e6;border:none;border-radius:8px;padding:5px 10px;cursor:pointer}
  .clearbtn:hover{background:#ffd0d6}
+ .savebtn{margin-top:8px;background:#eef3ff;color:#2f4d9e;font-weight:700;padding:8px 12px;border-radius:10px;font-size:13px}
+ .savebtn:hover{background:#e0e9ff}
+ .preset-chip{background:#fff5e9;color:#b45a09;cursor:pointer;font-weight:600}
+ .preset-chip b{color:#d39a5e;font-weight:800}
  .favbtn{position:absolute;top:7px;right:7px;z-index:2;width:30px;height:30px;padding:0;border:none;border-radius:50%;background:rgba(255,255,255,.92);color:#b6bdc8;font-size:15px;line-height:30px;text-align:center;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.18)}
  .favbtn:hover{background:#fff;transform:scale(1.08)}
  .favbtn.on{color:#ff3b30}
@@ -601,6 +675,11 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
     <button class=preset onclick="preset('comp')">🎯 당첨확률 UP (경쟁률 ≤ 1)</button>
     <button class=preset onclick="preset('urgent')">⏰ 마감 임박 (D-3 이하)</button>
     <button class=clearbtn onclick="clearAll()">🧹 전체 해제</button>
+  </div>
+  <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+    <div class=guhd style="margin-bottom:8px">⭐ 내 검색 조건 (저장 후 한 번에 적용)</div>
+    <div class=chips id=presets></div>
+    <button class=savebtn onclick="savePreset()">＋ 지금 조건 저장</button>
   </div>
 </div>
 
@@ -905,6 +984,47 @@ async function clearAll(){               // 완전 전체 해제(모든 조건)
   await post('/api/clear',{type:'all'});await load();
 }
 function _showClear(id,has){const e=document.getElementById(id); if(e) e.style.display=has?'':'none';}
+// 저장된 검색 조건(프리셋)
+function guestPresets(){ try{return JSON.parse(localStorage.getItem('presets')||'{}');}catch(e){return {};} }
+function presetList(){
+  if(!guest) return (S.presets||[]);
+  const o=guestPresets(); return Object.keys(o).map(n=>({name:n,payload:o[n]}));
+}
+function curPayload(){
+  return {sites:S.sites||[],keywords:S.keywords||[],regions:S.regions||[],
+          categories:S.categories||[],channels:S.channels||[],
+          max_competition:(S.max_competition??null),max_dday:(S.max_dday??null)};
+}
+function renderPresets(){
+  const c=document.getElementById('presets'); if(!c)return; c.innerHTML='';
+  const list=presetList();
+  if(!list.length){ c.innerHTML='<span class=muted>저장된 조건이 없어요. 조건을 고른 뒤 아래로 저장하세요.</span>'; return; }
+  list.forEach(p=>{
+    const e=document.createElement('span'); e.className='chip preset-chip';
+    const t=document.createElement('span'); t.textContent=p.name; t.onclick=()=>applyPreset(p.name,p.payload);
+    const x=document.createElement('b'); x.textContent=' ×'; x.title='삭제';
+    x.onclick=(ev)=>{ev.stopPropagation();delPreset(p.name);};
+    e.appendChild(t); e.appendChild(x); c.appendChild(e);
+  });
+}
+async function savePreset(){
+  const name=(prompt('이 검색 조건의 이름을 정해주세요 (예: 강원 맛집 블로그)')||'').trim();
+  if(!name)return;
+  const payload=curPayload();
+  if(guest){const o=guestPresets();o[name]=payload;localStorage.setItem('presets',JSON.stringify(o));renderPresets();return;}
+  await post('/api/preset/save',{name,payload}); await load();
+}
+async function applyPreset(name,payload){
+  S.sites=payload.sites||[];S.keywords=payload.keywords||[];S.regions=payload.regions||[];
+  S.categories=payload.categories||[];S.channels=payload.channels||[];
+  S.max_competition=(payload.max_competition??null);S.max_dday=(payload.max_dday??null);curSido=null;
+  if(guest){refreshLocal();return;}
+  await post('/api/preset/apply',{name}); await load();
+}
+async function delPreset(name){
+  if(guest){const o=guestPresets();delete o[name];localStorage.setItem('presets',JSON.stringify(o));renderPresets();return;}
+  await post('/api/preset/delete',{name}); await load();
+}
 function delRegion(v){ pickRegion(v); }
 function renderSites(){
   const c=document.getElementById('sites'); if(!c)return; c.innerHTML='';
@@ -930,6 +1050,7 @@ function render(){
   _showClear('clrkw',(S.keywords||[]).length);
   _showClear('clrcat',(S.categories||[]).length);
   _showClear('clrch',(S.channels||[]).length);
+  renderPresets();
   document.getElementById('maxcomp').value=(S.max_competition??'');
   document.getElementById('maxdday').value=(S.max_dday??'');
 }

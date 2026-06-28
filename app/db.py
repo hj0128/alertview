@@ -134,6 +134,13 @@ def _create_schema() -> None:
             PRIMARY KEY(chat_id, site, cid)
         )
         """,
+        f"""
+        CREATE TABLE IF NOT EXISTS presets (
+            chat_id {int_pk} NOT NULL, name TEXT NOT NULL,
+            payload TEXT, created_at TEXT,
+            PRIMARY KEY(chat_id, name)
+        )
+        """,
         """
         CREATE TABLE IF NOT EXISTS region_cache (
             raw TEXT PRIMARY KEY, norm TEXT
@@ -305,6 +312,29 @@ def favorites_set(chat_id: int) -> set:
         rows = _c().execute(_q("SELECT site, cid FROM favorites WHERE chat_id=?"),
                             (chat_id,)).fetchall()
     return {(r["site"], r["cid"]) for r in rows}
+
+
+def save_preset(chat_id: int, name: str, payload: str) -> None:
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO presets(chat_id, name, payload, created_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(chat_id, name) DO UPDATE SET payload=excluded.payload"),
+            (chat_id, name, payload, _now()))
+        _c().commit()
+
+
+def list_presets(chat_id: int) -> List[dict]:
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT name, payload FROM presets WHERE chat_id=? ORDER BY created_at"),
+            (chat_id,)).fetchall()
+    return [{"name": r["name"], "payload": r["payload"]} for r in rows]
+
+
+def delete_preset(chat_id: int, name: str) -> None:
+    with _lock:
+        _c().execute(_q("DELETE FROM presets WHERE chat_id=? AND name=?"), (chat_id, name))
+        _c().commit()
 
 
 def favorites_rows(chat_id: int) -> List[dict]:
