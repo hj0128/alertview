@@ -410,7 +410,8 @@ async def seen_all(request: Request):
 async def home(request: Request):
     # 로그인 여부와 상관없이 항상 메인(피드)을 보여준다.
     # 비로그인이면 상단 로그인 배너 + 피드만, 로그인이면 설정까지 노출.
-    return HTMLResponse(_app_html())
+    # no-store: 배포 후 새 JS/CSS 가 즉시 반영되도록(브라우저 캐시로 옛 화면 고착 방지)
+    return HTMLResponse(_app_html(), headers={"Cache-Control": "no-store"})
 
 
 def _widget_html(size: str = "large") -> str:
@@ -649,6 +650,12 @@ async function load(){
   document.getElementById('notifcard').style.display=guest?'none':'';
   document.getElementById('logoutlink').style.display=guest?'none':'';
   document.getElementById('favtgl').style.display=guest?'none':'';  // 찜은 로그인 사용자만
+  const u=new URLSearchParams(location.search);          // URL 로 정렬·찜 지정 가능(공유/북마크)
+  if(['recent','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
+  favOnly=(u.get('fav')==='1') && !guest;
+  document.getElementById('sortsel').value=feedSort;     // 드롭다운에 현재 정렬 반영
+  const fb=document.getElementById('favtgl');
+  fb.classList.toggle('on',favOnly); fb.textContent=favOnly?'♥ 찜만':'♡ 찜';
   render();
   loadCampaigns();
 }
