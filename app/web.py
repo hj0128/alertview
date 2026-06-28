@@ -268,9 +268,11 @@ async def campaigns(request: Request):
             "max_dday": int(md) if md is not None else None,
         }
         viewed = set()
+        fav_set = set()
     else:
         f = db.get_all_filters(uid)
         viewed = db.viewed_set(uid)
+        fav_set = db.favorites_set(uid)
 
     # 페이지네이션 파라미터(무한스크롤)
     try:
@@ -282,6 +284,10 @@ async def campaigns(request: Request):
     except ValueError:
         limit = config.FEED_PAGE
     limit = max(1, min(limit, 200))
+    sort = request.query_params.get("sort", "recent")
+    if sort not in ("recent", "deadline", "competition"):
+        sort = "recent"
+    fav_only = request.query_params.get("fav") == "1" and not guest
 
     today = time.strftime("%Y-%m-%d")  # '오늘' 올라온 캠페인 = NEW
 
@@ -309,7 +315,25 @@ async def campaigns(request: Request):
             "image": r["image"] if "image" in r.keys() else "",
             "is_new": (r["first_seen"] or "").startswith(today),
             "is_viewed": (r["site"], r["cid"]) in viewed,
+            "is_fav": (r["site"], r["cid"]) in fav_set,
         }
+
+    def _sort(items):
+        if sort == "deadline":      # 마감 임박순(미상은 뒤로)
+            items.sort(key=lambda d: (d["dday"] is None, d["dday"] if d["dday"] is not None else 0))
+        elif sort == "competition":  # 경쟁률 낮은순(미상은 뒤로)
+            items.sort(key=lambda d: (d["competition"] is None,
+                                      d["competition"] if d["competition"] is not None else 0))
+        return items
+
+    if fav_only:
+        # 찜만 보기: 사이드바 필터와 무관하게 '내가 담은 것 전부'(마감 지난 것도 포함).
+        matched = [_to_dict(r) for r in db.favorites_rows(uid)]
+        _sort(matched)
+        new_count = sum(1 for d in matched if d["is_new"])
+        page = matched[offset:offset + limit]
+        return {"campaigns": page, "new_count": new_count, "total": len(matched),
+                "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
 
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
                       or f["channels"] or f["max_competition"] is not None or f["max_dday"] is not None)
@@ -318,7 +342,7 @@ async def campaigns(request: Request):
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
         total = db.count_seen()
         new_count = db.count_seen_new(today)
-        page = [_to_dict(r) for r in db.list_page(offset, limit)]
+        page = [_to_dict(r) for r in db.list_page(offset, limit, sort)]
         return {"campaigns": page, "new_count": new_count, "total": total,
                 "offset": offset, "limit": limit, "has_more": offset + limit < total}
 
@@ -339,6 +363,7 @@ async def campaigns(request: Request):
         if d["is_new"]:
             new_count += 1
         matched.append(d)
+    _sort(matched)
     page = matched[offset:offset + limit]
     return {"campaigns": page, "new_count": new_count, "total": len(matched),
             "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
@@ -354,6 +379,19 @@ async def view(request: Request):
     site, cid = b.get("site"), b.get("cid")
     if site and cid:
         db.mark_viewed(uid, str(site), str(cid))
+    return {"ok": True}
+
+
+@app.post("/api/fav")
+async def fav(request: Request):
+    """캠페인 찜 추가/해제(로그인 필요)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    b = await request.json()
+    site, cid = b.get("site"), b.get("cid")
+    if site and cid:
+        db.set_favorite(uid, str(site), str(cid), bool(b.get("on")))
     return {"ok": True}
 
 
@@ -493,6 +531,12 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .badge{position:absolute;top:7px;left:7px;background:#ff3b30;color:#fff;font-size:9.5px;font-weight:800;letter-spacing:.02em;border-radius:7px;padding:3px 7px;z-index:1;box-shadow:0 2px 6px rgba(255,59,48,.4)}
  .seenbtn{background:#eef3ff;color:#2f4d9e;padding:8px 13px;font-weight:600}
  .seenbtn:hover{background:#e0e9ff}
+ .feedctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+ .sortsel{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:13px;background:#fff;color:var(--ink2);cursor:pointer}
+ #favtgl.on{background:#ffe3e6;color:#e0354b}
+ .favbtn{position:absolute;top:7px;right:7px;z-index:2;width:30px;height:30px;padding:0;border:none;border-radius:50%;background:rgba(255,255,255,.92);color:#b6bdc8;font-size:15px;line-height:30px;text-align:center;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.18)}
+ .favbtn:hover{background:#fff;transform:scale(1.08)}
+ .favbtn.on{color:#ff3b30}
  #newbanner{width:100%;background:var(--blue);color:#fff;font-weight:700;padding:11px;border-radius:12px;margin-top:10px;font-size:13px;border:none;cursor:pointer;box-shadow:0 6px 16px -6px rgba(59,110,246,.55)}
  #newbanner:hover{background:var(--blue-d)}
  .num{display:flex;align-items:center;gap:8px;margin-bottom:10px}
@@ -579,7 +623,15 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 <div class=col-right>
 <div class=card>
   <div class=top><h2 style="margin:0">📋 캠페인 <span id=cnt class=muted></span></h2>
-    <button class=seenbtn onclick="seenAll()">모두 읽음</button></div>
+    <div class=feedctl>
+      <select id=sortsel class=sortsel onchange="changeSort()">
+        <option value=recent>최신순</option>
+        <option value=deadline>마감임박순</option>
+        <option value=competition>경쟁률↓</option>
+      </select>
+      <button id=favtgl class=seenbtn onclick="toggleFavOnly()" style="display:none">♡ 찜</button>
+      <button class=seenbtn onclick="seenAll()">모두 읽음</button>
+    </div></div>
   <button id=newbanner onclick="showNew()" style="display:none"></button>
   <div id=feedwrap><div id=feed></div></div>
 </div>
@@ -596,12 +648,14 @@ async function load(){
   document.getElementById('loginbar').style.display=guest?'':'none';
   document.getElementById('notifcard').style.display=guest?'none':'';
   document.getElementById('logoutlink').style.display=guest?'none':'';
+  document.getElementById('favtgl').style.display=guest?'none':'';  // 찜은 로그인 사용자만
   render();
   loadCampaigns();
 }
 function refreshLocal(){ render(); loadCampaigns(); }   // 게스트: 서버 저장 없이 화면만 갱신
 function toggleArr(arr,v){const i=arr.indexOf(v); if(i>=0)arr.splice(i,1); else arr.push(v);}
 let feedOffset=0, feedTotal=0, feedLoading=false, feedDone=false;
+let feedSort='recent', favOnly=false;
 const viewedLocal=new Set();   // 이번 세션에서 클릭(읽음)한 항목 → 자동 새로고침에도 유지
 const loadedKeys=new Set();     // 현재 피드에 표시된 캠페인 키 → 새 항목 감지용
 const vkey=(s,c)=>s+'|'+c;
@@ -616,7 +670,22 @@ function feedParams(){
     if(S.max_competition!=null)p.set('maxcomp',S.max_competition);
     if(S.max_dday!=null)p.set('maxdday',S.max_dday);
   }
+  p.set('sort',feedSort);
+  if(favOnly)p.set('fav','1');
   return p;
+}
+function changeSort(){ feedSort=document.getElementById('sortsel').value; loadCampaigns(true); }
+function toggleFavOnly(){
+  favOnly=!favOnly;
+  const b=document.getElementById('favtgl');
+  b.classList.toggle('on',favOnly); b.textContent=favOnly?'♥ 찜만':'♡ 찜';
+  loadCampaigns(true);
+}
+async function toggleFav(site,cid,btn){
+  const on=!btn.classList.contains('on');
+  btn.classList.toggle('on',on); btn.textContent=on?'♥':'♡';
+  await post('/api/fav',{site,cid,on});
+  if(favOnly && !on){ const a=btn.closest('.item'); if(a) a.remove(); }  // 찜 목록에서 해제 시 즉시 제거
 }
 async function loadCampaigns(reset=true){
   if(feedLoading)return; feedLoading=true;
@@ -659,6 +728,12 @@ function appendFeed(arr){
       img.addEventListener('error',()=>{img.replaceWith(makePh());});
       img.src=c.image;
       const ph=a.querySelector('.thumb.ph'); if(ph) ph.replaceWith(img);
+    }
+    if(!guest){
+      const fb=document.createElement('button');
+      fb.className='favbtn'+(c.is_fav?' on':''); fb.textContent=c.is_fav?'♥':'♡'; fb.title='찜';
+      fb.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();toggleFav(c.site,c.cid,fb);});
+      a.appendChild(fb);
     }
     a.addEventListener('click',()=>markView(c.site,c.cid,a));
     f.appendChild(a);

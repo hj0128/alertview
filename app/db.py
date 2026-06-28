@@ -128,6 +128,12 @@ def _create_schema() -> None:
             PRIMARY KEY(chat_id, site, cid)
         )
         """,
+        f"""
+        CREATE TABLE IF NOT EXISTS favorites (
+            chat_id {int_pk} NOT NULL, site TEXT NOT NULL, cid TEXT NOT NULL,
+            PRIMARY KEY(chat_id, site, cid)
+        )
+        """,
         """
         CREATE TABLE IF NOT EXISTS region_cache (
             raw TEXT PRIMARY KEY, norm TEXT
@@ -278,6 +284,37 @@ def viewed_set(chat_id: int) -> set:
         rows = _c().execute(_q("SELECT site, cid FROM viewed WHERE chat_id=?"),
                             (chat_id,)).fetchall()
     return {(r["site"], r["cid"]) for r in rows}
+
+
+# --------------------------------------------------------------------------- #
+# 찜(즐겨찾기)
+# --------------------------------------------------------------------------- #
+def set_favorite(chat_id: int, site: str, cid: str, on: bool) -> None:
+    with _lock:
+        if on:
+            _c().execute(_q("INSERT INTO favorites(chat_id, site, cid) VALUES(?,?,?) "
+                            "ON CONFLICT DO NOTHING"), (chat_id, site, cid))
+        else:
+            _c().execute(_q("DELETE FROM favorites WHERE chat_id=? AND site=? AND cid=?"),
+                         (chat_id, site, cid))
+        _c().commit()
+
+
+def favorites_set(chat_id: int) -> set:
+    with _lock:
+        rows = _c().execute(_q("SELECT site, cid FROM favorites WHERE chat_id=?"),
+                            (chat_id,)).fetchall()
+    return {(r["site"], r["cid"]) for r in rows}
+
+
+def favorites_rows(chat_id: int) -> List[dict]:
+    """사용자가 찜한 캠페인의 seen 행(최신순). 마감 지난 것도 본인이 담았으니 노출."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT s.* FROM seen s JOIN favorites f ON f.site=s.site AND f.cid=s.cid "
+            f"WHERE f.chat_id=? ORDER BY s.first_seen DESC, s.{_tiebreak()} DESC"),
+            (chat_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -462,12 +499,22 @@ def list_recent(limit: int = 200) -> List[dict]:
     return [dict(r) for r in rows]
 
 
-def list_page(offset: int, limit: int) -> List[dict]:
-    """최신순 페이지(필터 없을 때 DB 레벨 페이지네이션용, 활성만)."""
+def _order_by(sort: str) -> str:
+    """정렬 ORDER BY 절. (deadline IS NULL) 은 PG/SQLite 모두 비널 먼저(NULLS LAST 효과)."""
+    tb = _tiebreak()
+    if sort == "deadline":      # 마감 임박순
+        return f"(deadline IS NULL), deadline ASC, {tb} DESC"
+    if sort == "competition":   # 경쟁률 낮은순
+        return f"(competition IS NULL), competition ASC, {tb} DESC"
+    return f"first_seen DESC, {tb} DESC"   # recent(기본): 최신순
+
+
+def list_page(offset: int, limit: int, sort: str = "recent") -> List[dict]:
+    """필터 없을 때 DB 레벨 페이지네이션(활성만) + 정렬."""
     with _lock:
         rows = _c().execute(_q(
             f"SELECT * FROM seen WHERE {_ACTIVE} "
-            f"ORDER BY first_seen DESC, {_tiebreak()} DESC LIMIT ? OFFSET ?"),
+            f"ORDER BY {_order_by(sort)} LIMIT ? OFFSET ?"),
             (_today(), limit, offset)).fetchall()
     return [dict(r) for r in rows]
 
