@@ -20,7 +20,7 @@ _SITE_NAMES = {a.key: a.name for a in ALL_ADAPTERS}
 
 WEB_REGIONS = [
     "서울", "경기", "인천", "강원", "충북", "충남", "대전", "세종",
-    "전북", "전남", "광주", "경북", "경남", "대구", "울산", "부산", "제주", "전국",
+    "전북", "전남", "광주", "경북", "경남", "대구", "울산", "부산", "제주",
 ]
 WEB_CATEGORIES = ["맛집", "뷰티", "여가", "배송", "배달", "페이백", "기자단", "기타"]
 WEB_CHANNELS = ["블로그", "릴스", "클립"]
@@ -85,10 +85,17 @@ async def logout(request: Request):
 
 
 def _region_tree_ordered() -> dict:
-    """db.region_tree()를 시/도 알려진 순서(WEB_REGIONS)대로 정렬해 반환."""
+    """db.region_tree()를 시/도 알려진 순서(WEB_REGIONS)대로 정렬해 반환.
+    '전국'은 노출 안 함(미선택=전체이므로 불필요), '기타'는 항상 맨 끝."""
     tree = db.region_tree()
+    tree.pop("전국", None)
     order = {name: i for i, name in enumerate(WEB_REGIONS)}
-    keys = sorted(tree.keys(), key=lambda s: (order.get(s, len(order)), s))
+
+    def rank(s):
+        if s == "기타":
+            return len(order) + 1
+        return order.get(s, len(order))
+    keys = sorted(tree.keys(), key=lambda s: (rank(s), s))
     return {k: tree[k] for k in keys}
 
 
@@ -213,6 +220,22 @@ async def channel_toggle(request: Request):
     val = ((await request.json()).get("value") or "").strip()
     cur = db.list_values(uid, "channel")
     db.remove_filter(uid, "channel", val) if val in cur else db.add_filter(uid, "channel", val)
+    return {"ok": True}
+
+
+@app.post("/api/clear")
+async def clear(request: Request):
+    """필터 전체 해제. type='all' 이면 모든 조건, 아니면 해당 종류만."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    t = ((await request.json()).get("type") or "").strip()
+    if t == "all":
+        db.clear_filters(uid)                 # 모든 ftype(키워드·지역·사이트·카테고리·채널·스칼라) 삭제
+    elif t in ("site", "keyword", "region", "category", "channel", "max_competition", "max_dday"):
+        db.clear_filters(uid, t)
+    else:
+        return JSONResponse({"error": "bad type"}, status_code=400)
     return {"ok": True}
 
 
@@ -538,6 +561,8 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .feedctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
  .sortsel{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:13px;background:#fff;color:var(--ink2);cursor:pointer}
  #favtgl.on{background:#ffe3e6;color:#e0354b}
+ .clearbtn{font-size:12px;font-weight:600;color:#e0354b;background:#ffe3e6;border:none;border-radius:8px;padding:5px 10px;cursor:pointer}
+ .clearbtn:hover{background:#ffd0d6}
  .favbtn{position:absolute;top:7px;right:7px;z-index:2;width:30px;height:30px;padding:0;border:none;border-radius:50%;background:rgba(255,255,255,.92);color:#b6bdc8;font-size:15px;line-height:30px;text-align:center;cursor:pointer;box-shadow:0 1px 5px rgba(0,0,0,.18)}
  .favbtn:hover{background:#fff;transform:scale(1.08)}
  .favbtn.on{color:#ff3b30}
@@ -575,18 +600,20 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   <div class=opts>
     <button class=preset onclick="preset('comp')">🎯 당첨확률 UP (경쟁률 ≤ 1)</button>
     <button class=preset onclick="preset('urgent')">⏰ 마감 임박 (D-3 이하)</button>
-    <button class=preset onclick="preset('reset')">초기화</button>
+    <button class=clearbtn onclick="clearAll()">🧹 전체 해제</button>
   </div>
 </div>
 
 <div class=card>
-  <h2>체험단</h2>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">체험단
+    <button class=clearbtn id=clrsites onclick="clearFilter('site','sites')" style="display:none">전체 해제</button></h2>
   <div class=opts id=sites></div>
   <p class=muted>보고 싶은 체험단만 선택. 안 고르면 전체.</p>
 </div>
 
 <div class=card>
-  <h2>키워드</h2>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">키워드
+    <button class=clearbtn id=clrkw onclick="clearFilter('keyword','keywords')" style="display:none">전체 해제</button></h2>
   <div class=row>
     <input type=text id=kw placeholder="예: 오마카세, 횡성" onkeydown="if(event.key==='Enter')addKw()">
     <button class=add onclick="addKw()">추가</button>
@@ -596,19 +623,22 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 </div>
 
 <div class=card>
-  <h2>카테고리</h2>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">카테고리
+    <button class=clearbtn id=clrcat onclick="clearFilter('category','categories')" style="display:none">전체 해제</button></h2>
   <div class=opts id=categories></div>
   <p class=muted>고른 카테고리만. 안 고르면 전체.</p>
 </div>
 
 <div class=card>
-  <h2>채널 (콘텐츠 유형)</h2>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">채널 (콘텐츠 유형)
+    <button class=clearbtn id=clrch onclick="clearFilter('channel','channels')" style="display:none">전체 해제</button></h2>
   <div class=opts id=channels></div>
   <p class=muted>블로그·릴스(=인스타)·클립. 디너의여왕은 블로그가 기본이에요.</p>
 </div>
 
 <div class=card>
-  <h2>지역</h2>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">지역
+    <button class=clearbtn id=regclear onclick="clearRegions()" style="display:none">전체 해제</button></h2>
   <div class=opts id=sidos></div>
   <div id=gus></div>
   <div class=chips id=regchips></div>
@@ -803,9 +833,14 @@ function optBtn(label,on,fn){
 function renderRegions(){
   const tree=S.region_tree||{};
   const sel=S.regions||[];
+  const rc=document.getElementById('regclear'); if(rc) rc.style.display=sel.length?'':'none';
   // 1) 시/도 버튼 (선택된 구가 있는 시/도는 점으로 표시)
   const sc=document.getElementById('sidos'); sc.innerHTML='';
   Object.keys(tree).forEach(sd=>{
+    if(sd==='기타'){   // 기타는 세부(구) 없이 단일 선택
+      const b=optBtn('기타'+(sel.includes('기타')?' •':''), sel.includes('기타'), ()=>pickRegion('기타'));
+      b.classList.add('sido'); sc.appendChild(b); return;
+    }
     const picked=sel.some(r=>r===sd||r.startsWith(sd+' '));
     const b=optBtn(sd+(picked?' •':''), curSido===sd, ()=>{
       curSido=(curSido===sd?null:sd); renderRegions();
@@ -857,6 +892,19 @@ function saveRegions(regs){
   if(guest){refreshLocal();return;}
   post('/api/region/set',{values:regs}).then(load);
 }
+function clearRegions(){ curSido=null; saveRegions([]); }   // 지역 전체 해제
+async function clearFilter(type,key){   // 특정 필터 전체 해제(체험단/키워드/카테고리/채널)
+  S[key]=[];
+  if(guest){refreshLocal();return;}
+  await post('/api/clear',{type});await load();
+}
+async function clearAll(){               // 완전 전체 해제(모든 조건)
+  S.sites=[];S.keywords=[];S.regions=[];S.categories=[];S.channels=[];
+  S.max_competition=null;S.max_dday=null;curSido=null;
+  if(guest){refreshLocal();return;}
+  await post('/api/clear',{type:'all'});await load();
+}
+function _showClear(id,has){const e=document.getElementById(id); if(e) e.style.display=has?'':'none';}
 function delRegion(v){ pickRegion(v); }
 function renderSites(){
   const c=document.getElementById('sites'); if(!c)return; c.innerHTML='';
@@ -878,6 +926,10 @@ function render(){
   opts('categories',S.all_categories,S.categories,toggleCategory);
   opts('channels',S.all_channels,S.channels,toggleChannel);
   renderRegions();
+  _showClear('clrsites',(S.sites||[]).length);
+  _showClear('clrkw',(S.keywords||[]).length);
+  _showClear('clrcat',(S.categories||[]).length);
+  _showClear('clrch',(S.channels||[]).length);
   document.getElementById('maxcomp').value=(S.max_competition??'');
   document.getElementById('maxdday').value=(S.max_dday??'');
 }
