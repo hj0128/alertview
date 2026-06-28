@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 from typing import List, Optional
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -55,12 +56,13 @@ def _pick_img(node) -> str:
             v = (img.get(attr) or "").strip()
             if not v or "data:image" in v:
                 continue
-            if v.startswith("/"):
-                v = BASE + v
             if "/skin/" in v:          # 로고·아이콘(scrap_ic/end_ico 등) 제외
                 continue
-            if v.startswith("http"):
-                return v
+            # 썸네일은 './data/list/thumb/..' 같은 상대경로 → 절대 URL로 변환
+            # (기존엔 '/'·'http' 로 시작하는 것만 처리해 './' 썸네일을 통째로 놓쳤음)
+            full = urljoin(BASE + "/", v)
+            if full.startswith("http"):
+                return full
     return ""
 
 

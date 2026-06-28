@@ -40,9 +40,23 @@ CATEGORY_KEYWORDS = {
 }
 
 
+def classify(text: str) -> str:
+    """텍스트를 표준 카테고리 하나로 분류. 어떤 키워드에도 안 걸리면 '기타'.
+    (사전 순서가 우선순위 - 맛집 > 뷰티 > 여가 > 배송 > 배달 > 페이백 > 기자단)"""
+    for cat, kws in CATEGORY_KEYWORDS.items():
+        if any(k in text for k in kws):
+            return cat
+    return "기타"
+
+
 def _category_hit(text: str, selected: List[str]) -> bool:
-    """선택한 카테고리 중 하나라도 텍스트에 (동의어 포함) 걸리면 True."""
+    """선택한 카테고리 중 하나라도 텍스트에 (동의어 포함) 걸리면 True.
+    '기타'는 다른 어떤 카테고리에도 안 걸리는 경우."""
     for sel in selected:
+        if sel == "기타":
+            if classify(text) == "기타":
+                return True
+            continue
         for kw in CATEGORY_KEYWORDS.get(sel, [sel]):
             if kw in text:
                 return True

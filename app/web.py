@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, config
-from .matcher import matches
+from .matcher import matches, classify
 from .adapters import ALL_ADAPTERS
 from .adapters.base import Campaign
 
@@ -22,7 +22,7 @@ WEB_REGIONS = [
     "서울", "경기", "인천", "강원", "충북", "충남", "대전", "세종",
     "전북", "전남", "광주", "경북", "경남", "대구", "울산", "부산", "제주", "전국",
 ]
-WEB_CATEGORIES = ["맛집", "배송", "배달", "여가", "뷰티", "페이백", "기자단"]
+WEB_CATEGORIES = ["맛집", "뷰티", "여가", "배송", "배달", "페이백", "기자단", "기타"]
 WEB_CHANNELS = ["블로그", "릴스", "클립"]
 
 app = FastAPI(title="체험단 알림 설정")
@@ -297,10 +297,13 @@ async def campaigns(request: Request):
         return r["dday"]
 
     def _to_dict(r):
+        # 표시 카테고리는 표준값으로 통일(사이트 원본이 '여행'·'식품'·빈값이어도 맛집/여가/배송/…/기타).
+        cat_txt = " ".join([r["title"] or "", r["region"] or "",
+                            r["category"] or "", r["channel"] or ""])
         return {
             "site": r["site"], "site_name": _SITE_NAMES.get(r["site"], r["site"]),
             "cid": r["cid"], "title": r["title"] or "", "url": r["url"] or "",
-            "region": r["region"] or "", "category": r["category"] or "",
+            "region": r["region"] or "", "category": classify(cat_txt),
             "channel": r["channel"] or "", "dday": _live_dday(r),
             "competition": r["competition"], "applicants": r["applicants"], "recruit": r["recruit"],
             "image": r["image"] if "image" in r.keys() else "",
@@ -319,9 +322,10 @@ async def campaigns(request: Request):
         return {"campaigns": page, "new_count": new_count, "total": total,
                 "offset": offset, "limit": limit, "has_more": offset + limit < total}
 
-    # 필터 적용 → 최신 FEED_SCAN_MAX 건을 훑어 매칭
+    # 필터 적용 → 활성 캠페인 전체를 훑어 매칭(사이트는 DB 레벨에서 선필터해 양을 줄임).
+    # list_recent 의 최신 N건 상한을 쓰면 오래 전 수집된 사이트가 통째로 누락되므로 list_active 사용.
     matched, new_count = [], 0
-    for r in db.list_recent(config.FEED_SCAN_MAX):
+    for r in db.list_active(sites=f.get("sites") or None):
         c = Campaign(
             site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
             url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
@@ -359,7 +363,7 @@ async def seen_all(request: Request):
     uid = _uid(request)
     if not uid:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    rows = db.list_recent(config.FEED_SCAN_MAX)
+    rows = db.list_active()
     db.mark_viewed_many(uid, [(r["site"], r["cid"]) for r in rows])
     return {"ok": True}
 

@@ -475,6 +475,22 @@ def count_seen() -> int:
                             (_today(),)).fetchone()["n"]
 
 
+def list_active(sites: Optional[List[str]] = None) -> List[dict]:
+    """활성(마감 안 지난) 캠페인 전체를 최신순으로. 사이트가 주어지면 DB 레벨에서 필터.
+    필터 적용 피드용 — list_recent 의 최신 N건 상한이 없어 오래된 사이트도 누락되지 않는다."""
+    today = _today()
+    sql = f"SELECT * FROM seen WHERE {_ACTIVE}"
+    params: list = [today]
+    if sites:
+        placeholders = ",".join(["?"] * len(sites))
+        sql += f" AND site IN ({placeholders})"
+        params.extend(sites)
+    sql += f" ORDER BY first_seen DESC, {_tiebreak()} DESC"
+    with _lock:
+        rows = _c().execute(_q(sql), tuple(params)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def purge_expired(grace_days: int = 3) -> int:
     """마감 후 grace_days 가 지난 캠페인을 DB 에서 삭제. 반환: 삭제 건수.
     (마감일 미상은 보존. grace_days 동안은 피드에선 숨겨지지만 DB 엔 남아 유예.)"""
