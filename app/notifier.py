@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 
 from .adapters.base import Campaign
 from . import db, config
-from .matcher import matches
+from .matcher import matches_filter
 
 log = logging.getLogger(__name__)
 
@@ -47,8 +47,7 @@ async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
     for chat_id in db.active_users():
         f = db.get_all_filters(chat_id)
         for c in campaigns:
-            if matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
-                       f["max_competition"], f["max_dday"], sites=f["sites"]):
+            if matches_filter(c, f):
                 try:
                     await bot.send_message(
                         chat_id=chat_id, text=format_campaign(c),

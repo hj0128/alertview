@@ -6,8 +6,7 @@
   - regions   : 하나라도 포함되면 통과 (OR)
   - categories: 하나라도 일치하면 통과 (OR)  예: 맛집, 카페
   - channels  : 하나라도 일치하면 통과 (OR)  예: 블로그, 릴스
-  - max_competition: 경쟁률 이하만 (당첨확률↑). 경쟁률 미상이면 제외하지 않음.
-  - max_dday  : 마감까지 남은 일수 이하만. 미상이면 제외하지 않음.
+  - 경쟁률·마감일·모집수·지원수: 각각 min~max 범위(설정된 쪽만 적용). 값이 미상이면 제외하지 않음.
 모든 필터가 비어 있으면 = 모든 신규 캠페인 수신.
 """
 from __future__ import annotations
@@ -71,6 +70,18 @@ def _channel_hit(ch: str, text: str) -> bool:
     return ch in text
 
 
+def _in_range(v, lo, hi) -> bool:
+    """값 v 가 [lo, hi] 범위 안인지. lo/hi 는 설정된 쪽만 적용(이상/이하).
+    v 가 미상(None)이면 숫자필터로 제외하지 않는다(알림 누락 방지)."""
+    if v is None:
+        return True
+    if lo is not None and v < lo:
+        return False
+    if hi is not None and v > hi:
+        return False
+    return True
+
+
 def matches(
     c: Campaign,
     keywords: List[str] = (),
@@ -82,6 +93,10 @@ def matches(
     sites: List[str] = (),
     min_recruit: Optional[int] = None,
     max_applicants: Optional[int] = None,
+    min_competition: Optional[float] = None,
+    min_dday: Optional[int] = None,
+    max_recruit: Optional[int] = None,
+    min_applicants: Optional[int] = None,
 ) -> bool:
     if sites and c.site not in sites:
         return False
@@ -99,12 +114,25 @@ def matches(
         return False
     if channels and not any(_channel_hit(ch, text) for ch in channels):
         return False
-    if max_competition is not None and c.competition is not None and c.competition > max_competition:
+    # 숫자 범위 필터(각각 min~max, 미상은 통과)
+    if not _in_range(c.competition, min_competition, max_competition):
         return False
-    if max_dday is not None and c.dday is not None and c.dday > max_dday:
+    if not _in_range(c.dday, min_dday, max_dday):
         return False
-    if min_recruit is not None and c.recruit is not None and c.recruit < min_recruit:
+    if not _in_range(c.recruit, min_recruit, max_recruit):
         return False
-    if max_applicants is not None and c.applicants is not None and c.applicants > max_applicants:
+    if not _in_range(c.applicants, min_applicants, max_applicants):
         return False
     return True
+
+
+def matches_filter(c: Campaign, f: dict) -> bool:
+    """사용자 필터 dict(get_all_filters 형식)로 매칭. 웹 피드·텔레그램 알림이 같은 규칙을 쓰도록 단일 진입점."""
+    return matches(
+        c, f["keywords"], f["regions"], f["categories"], f["channels"],
+        sites=f.get("sites") or [],
+        min_competition=f.get("min_competition"), max_competition=f.get("max_competition"),
+        min_dday=f.get("min_dday"), max_dday=f.get("max_dday"),
+        min_recruit=f.get("min_recruit"), max_recruit=f.get("max_recruit"),
+        min_applicants=f.get("min_applicants"), max_applicants=f.get("max_applicants"),
+    )

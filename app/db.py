@@ -428,9 +428,13 @@ def get_all_filters(chat_id: int) -> dict:
         "regions": list_values(chat_id, "region"),
         "categories": list_values(chat_id, "category"),
         "channels": list_values(chat_id, "channel"),
+        "min_competition": _f(get_scalar(chat_id, "min_competition")),
         "max_competition": _f(get_scalar(chat_id, "max_competition")),
+        "min_dday": _i(get_scalar(chat_id, "min_dday")),
         "max_dday": int(_f(md)) if md not in (None, "") else None,
         "min_recruit": _i(get_scalar(chat_id, "min_recruit")),
+        "max_recruit": _i(get_scalar(chat_id, "max_recruit")),
+        "min_applicants": _i(get_scalar(chat_id, "min_applicants")),
         "max_applicants": _i(get_scalar(chat_id, "max_applicants")),
     }
 

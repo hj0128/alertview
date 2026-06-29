@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import db, config
-from .matcher import matches, category_of
+from .matcher import matches_filter, category_of
 from .adapters import ALL_ADAPTERS
 from .adapters.base import Campaign
 
@@ -25,6 +25,10 @@ WEB_REGIONS = [
 ]
 WEB_CATEGORIES = ["맛집", "뷰티", "여가", "배송", "배달", "페이백", "기자단", "기타"]
 WEB_CHANNELS = ["블로그", "클립", "인스타", "릴스", "유튜브", "숏츠", "틱톡", "기타"]
+
+# 숫자 범위 필터(각각 min~max). 저장(스칼라)·프리셋·전체해제·상태응답이 같은 목록을 공유한다.
+NUMERIC_FILTERS = ("min_competition", "max_competition", "min_dday", "max_dday",
+                   "min_recruit", "max_recruit", "min_applicants", "max_applicants")
 
 app = FastAPI(title="체험단 알림 설정")
 app.add_middleware(SessionMiddleware, secret_key=config.WEB_SECRET, max_age=60 * 60 * 24 * 30)
@@ -112,8 +116,7 @@ async def state(request: Request):
             "name": "",
             "sites": [],
             "keywords": [], "regions": [], "categories": [], "channels": [],
-            "max_competition": None, "max_dday": None,
-            "min_recruit": None, "max_applicants": None,
+            **{k: None for k in NUMERIC_FILTERS},
             "all_sites": WEB_SITES,
             "all_regions": WEB_REGIONS,
             "all_categories": WEB_CATEGORIES,
@@ -137,10 +140,7 @@ async def state(request: Request):
         "regions": f["regions"],
         "categories": f["categories"],
         "channels": f["channels"],
-        "max_competition": f["max_competition"],
-        "max_dday": f["max_dday"],
-        "min_recruit": f["min_recruit"],
-        "max_applicants": f["max_applicants"],
+        **{k: f[k] for k in NUMERIC_FILTERS},
         "all_sites": WEB_SITES,
         "all_regions": WEB_REGIONS,
         "all_categories": WEB_CATEGORIES,
@@ -243,8 +243,7 @@ async def clear(request: Request):
     t = ((await request.json()).get("type") or "").strip()
     if t == "all":
         db.clear_filters(uid)                 # 모든 ftype(키워드·지역·사이트·카테고리·채널·스칼라) 삭제
-    elif t in ("site", "keyword", "region", "category", "channel",
-               "max_competition", "max_dday", "min_recruit", "max_applicants"):
+    elif t in ("site", "keyword", "region", "category", "channel") + NUMERIC_FILTERS:
         db.clear_filters(uid, t)
     else:
         return JSONResponse({"error": "bad type"}, status_code=400)
@@ -262,7 +261,7 @@ def _normalize_payload(p: dict) -> dict:
     for k in _PRESET_KEYS:
         vals = p.get(k) or []
         out[k] = [str(x).strip() for x in vals if str(x).strip()][:50]
-    for k in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
+    for k in NUMERIC_FILTERS:
         v = p.get(k)
         out[k] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     return out
@@ -298,7 +297,7 @@ async def preset_apply(request: Request):
     for k in _PRESET_KEYS:
         for v in payload[k]:
             db.add_filter(uid, _PRESET_FTYPE[k], v)
-    for k in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
+    for k in NUMERIC_FILTERS:
         if payload[k] is not None:
             db.set_scalar(uid, k, payload[k])
     return {"ok": True}
@@ -320,7 +319,7 @@ async def set_scalar(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     key = body.get("key")
-    if key not in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
+    if key not in NUMERIC_FILTERS:
         return JSONResponse({"error": "bad key"}, status_code=400)
     val = body.get("value")
     db.set_scalar(uid, key, val if val not in ("", None) else None)
@@ -356,15 +355,18 @@ async def campaigns(request: Request):
                 return float(v) if v not in ("", None) else None
             except ValueError:
                 return None
-        md = _num("maxdday")
+
+        def _int(k):
+            v = _num(k)
+            return int(v) if v is not None else None
         f = {
             "sites": _csv("sites"),
             "keywords": _csv("kw"), "regions": _csv("region"),
             "categories": _csv("cat"), "channels": _csv("ch"),
-            "max_competition": _num("maxcomp"),
-            "max_dday": int(md) if md is not None else None,
-            "min_recruit": (lambda v: int(v) if v is not None else None)(_num("minrec")),
-            "max_applicants": (lambda v: int(v) if v is not None else None)(_num("maxapp")),
+            "min_competition": _num("mincomp"), "max_competition": _num("maxcomp"),
+            "min_dday": _int("mindday"), "max_dday": _int("maxdday"),
+            "min_recruit": _int("minrec"), "max_recruit": _int("maxrec"),
+            "min_applicants": _int("minapp"), "max_applicants": _int("maxapp"),
         }
         viewed = set()
         fav_set = set()
@@ -438,8 +440,7 @@ async def campaigns(request: Request):
                 "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
 
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
-                      or f["channels"] or f["max_competition"] is not None or f["max_dday"] is not None
-                      or f["min_recruit"] is not None or f["max_applicants"] is not None)
+                      or f["channels"] or any(f.get(k) is not None for k in NUMERIC_FILTERS))
 
     if not has_filter:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
@@ -459,9 +460,7 @@ async def campaigns(request: Request):
             channel=r["channel"] or "", dday=_live_dday(r), applicants=r["applicants"],
             recruit=r["recruit"], competition=r["competition"],
         )
-        if not matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
-                       f["max_competition"], f["max_dday"], sites=f.get("sites") or [],
-                       min_recruit=f["min_recruit"], max_applicants=f["max_applicants"]):
+        if not matches_filter(c, f):
             continue
         d = _to_dict(r)
         if d["is_new"]:
@@ -651,7 +650,9 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  #newbanner{width:100%;background:var(--blue);color:#fff;font-weight:700;padding:11px;border-radius:12px;margin-top:10px;font-size:13px;border:none;cursor:pointer;box-shadow:0 6px 16px -6px rgba(59,110,246,.55)}
  #newbanner:hover{background:var(--blue-d)}
  .num{display:flex;align-items:center;gap:8px;margin-bottom:10px}
- .num label{width:64px;font-size:14px;color:var(--ink2)}
+ .num label{width:52px;font-size:14px;color:var(--ink2);flex:none}
+ .num input{padding:9px 10px;font-size:14px;text-align:center}
+ .tilde{color:var(--ink2);font-size:13px;flex:none}
  .preset{background:#fff5e9;color:#b45a09;border:1px solid #ffdcb0;padding:8px 13px;border-radius:999px;font-size:13px;font-weight:600}
  .preset:hover{background:#ffeed7}
  #loginbar{background:linear-gradient(135deg,#3b6ef6,#5a86f8);color:#fff;border-radius:18px;padding:20px;margin-bottom:16px;text-align:center;box-shadow:0 14px 32px -12px rgba(45,108,223,.55)}
@@ -728,15 +729,23 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 
 <div class=card>
   <h2>상세 (당첨 확률)</h2>
-  <div class=num><label>경쟁률 ≤</label>
-    <input type=number step=0.1 min=0 id=maxcomp placeholder="예: 1" onchange="saveNum('max_competition','maxcomp')"></div>
-  <div class=num><label>마감일 ≤</label>
-    <input type=number min=0 id=maxdday placeholder="예: 3" onchange="saveNum('max_dday','maxdday')"></div>
-  <div class=num><label>모집수 ≥</label>
-    <input type=number min=0 id=minrec placeholder="예: 10" onchange="saveNum('min_recruit','minrec')"></div>
-  <div class=num><label>지원수 ≤</label>
-    <input type=number min=0 id=maxapp placeholder="예: 20" onchange="saveNum('max_applicants','maxapp')"></div>
-  <p class=muted>경쟁률 = 신청자÷모집인원. 낮을수록 당첨 확률↑. 모집수 많고 지원수 적을수록 유리. 비워두면 제한 없음.</p>
+  <div class=num><label>경쟁률</label>
+    <input type=number step=0.1 min=0 id=mincomp placeholder=최소 onchange="saveNum('min_competition','mincomp')">
+    <span class=tilde>~</span>
+    <input type=number step=0.1 min=0 id=maxcomp placeholder=최대 onchange="saveNum('max_competition','maxcomp')"></div>
+  <div class=num><label>마감일</label>
+    <input type=number min=0 id=mindday placeholder=최소 onchange="saveNum('min_dday','mindday')">
+    <span class=tilde>~</span>
+    <input type=number min=0 id=maxdday placeholder=최대 onchange="saveNum('max_dday','maxdday')"></div>
+  <div class=num><label>모집수</label>
+    <input type=number min=0 id=minrec placeholder=최소 onchange="saveNum('min_recruit','minrec')">
+    <span class=tilde>~</span>
+    <input type=number min=0 id=maxrec placeholder=최대 onchange="saveNum('max_recruit','maxrec')"></div>
+  <div class=num><label>지원수</label>
+    <input type=number min=0 id=minapp placeholder=최소 onchange="saveNum('min_applicants','minapp')">
+    <span class=tilde>~</span>
+    <input type=number min=0 id=maxapp placeholder=최대 onchange="saveNum('max_applicants','maxapp')"></div>
+  <p class=muted>비워둔 칸은 제한 없음. 예) 경쟁률 0~2, 마감일 3~10일. 경쟁률=신청÷모집(낮을수록 당첨↑), 모집수 많고 지원수 적을수록 유리.</p>
 </div>
 </div>
 <div class=col-right>
@@ -760,6 +769,11 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 <script>
 let S={}, guest=false;
 let curSido=null;   // 지역: 현재 펼친 시/도
+// 숫자 범위 필터: [상태키, 짧은이름(=쿼리파라미터=input id)]. 저장·URL·렌더·해제가 이 목록 하나를 공유.
+const NUMF=[['min_competition','mincomp'],['max_competition','maxcomp'],
+            ['min_dday','mindday'],['max_dday','maxdday'],
+            ['min_recruit','minrec'],['max_recruit','maxrec'],
+            ['min_applicants','minapp'],['max_applicants','maxapp']];
 async function load(){
   const r=await fetch('/api/state');
   S=await r.json();
@@ -792,10 +806,7 @@ function feedParams(){
     if(S.regions.length)p.set('region',S.regions.join(','));
     if(S.categories.length)p.set('cat',S.categories.join(','));
     if(S.channels.length)p.set('ch',S.channels.join(','));
-    if(S.max_competition!=null)p.set('maxcomp',S.max_competition);
-    if(S.max_dday!=null)p.set('maxdday',S.max_dday);
-    if(S.min_recruit!=null)p.set('minrec',S.min_recruit);
-    if(S.max_applicants!=null)p.set('maxapp',S.max_applicants);
+    NUMF.forEach(([sk,sn])=>{ if(S[sk]!=null)p.set(sn,S[sk]); });
   }
   p.set('sort',feedSort);
   if(favOnly)p.set('fav','1');
@@ -987,7 +998,7 @@ async function clearFilter(type,key){   // 특정 필터 전체 해제(체험단
 }
 async function clearAll(){               // 완전 전체 해제(모든 조건)
   S.sites=[];S.keywords=[];S.regions=[];S.categories=[];S.channels=[];
-  S.max_competition=null;S.max_dday=null;S.min_recruit=null;S.max_applicants=null;curSido=null;
+  NUMF.forEach(([sk])=>S[sk]=null);curSido=null;
   if(guest){refreshLocal();return;}
   await post('/api/clear',{type:'all'});await load();
 }
@@ -999,10 +1010,10 @@ function presetList(){
   const o=guestPresets(); return Object.keys(o).map(n=>({name:n,payload:o[n]}));
 }
 function curPayload(){
-  return {sites:S.sites||[],keywords:S.keywords||[],regions:S.regions||[],
-          categories:S.categories||[],channels:S.channels||[],
-          max_competition:(S.max_competition??null),max_dday:(S.max_dday??null),
-          min_recruit:(S.min_recruit??null),max_applicants:(S.max_applicants??null)};
+  const p={sites:S.sites||[],keywords:S.keywords||[],regions:S.regions||[],
+           categories:S.categories||[],channels:S.channels||[]};
+  NUMF.forEach(([sk])=>p[sk]=(S[sk]??null));
+  return p;
 }
 function renderPresets(){
   const c=document.getElementById('presets'); if(!c)return; c.innerHTML='';
@@ -1026,8 +1037,7 @@ async function savePreset(){
 async function applyPreset(name,payload){
   S.sites=payload.sites||[];S.keywords=payload.keywords||[];S.regions=payload.regions||[];
   S.categories=payload.categories||[];S.channels=payload.channels||[];
-  S.max_competition=(payload.max_competition??null);S.max_dday=(payload.max_dday??null);
-  S.min_recruit=(payload.min_recruit??null);S.max_applicants=(payload.max_applicants??null);curSido=null;
+  NUMF.forEach(([sk])=>S[sk]=(payload[sk]??null));curSido=null;
   if(guest){refreshLocal();return;}
   await post('/api/preset/apply',{name}); await load();
 }
@@ -1061,10 +1071,7 @@ function render(){
   _showClear('clrcat',(S.categories||[]).length);
   _showClear('clrch',(S.channels||[]).length);
   renderPresets();
-  document.getElementById('maxcomp').value=(S.max_competition??'');
-  document.getElementById('maxdday').value=(S.max_dday??'');
-  document.getElementById('minrec').value=(S.min_recruit??'');
-  document.getElementById('maxapp').value=(S.max_applicants??'');
+  NUMF.forEach(([sk,sn])=>{const e=document.getElementById(sn); if(e)e.value=(S[sk]??'');});
 }
 async function post(u,b){await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});}
 async function addKw(){const i=document.getElementById('kw');const v=i.value.trim();if(!v)return;
