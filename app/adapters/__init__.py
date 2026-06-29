@@ -13,7 +13,7 @@ from .seoulouba import SeouloubaAdapter
 from .assaview import AssaviewAdapter
 from .ringble import RingbleAdapter
 from .demo import DemoAdapter
-from .stubs import RevuAdapter
+from .revu import RevuAdapter
 
 ALL_ADAPTERS = [
     DinnerQueenAdapter(),

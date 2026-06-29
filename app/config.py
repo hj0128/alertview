@@ -45,6 +45,13 @@ DQ_MAX_PAGES = int(os.getenv("DQ_MAX_PAGES", "0"))  # 0 = 끝까지(자동 종�
 # 값은 브라우저 개발자도구 > Network > 요청 헤더의 Cookie 문자열 전체를 그대로 붙여넣기.
 MRBLOG_COOKIE = os.getenv("MRBLOG_COOKIE", "").strip()
 
+# 레뷰(revu.net): 캠페인 목록 API(api.weble.net)가 로그인 토큰을 요구.
+# 계정(이메일/비번)으로 로그인해 JWT 토큰을 발급받아 수집한다(토큰 수명 약 15일, 자동 재로그인).
+# 비우면 레뷰 어댑터는 비활성. 알림 전용 부계정 사용을 권장.
+REVU_USERNAME = os.getenv("REVU_USERNAME", "").strip()
+REVU_PASSWORD = os.getenv("REVU_PASSWORD", "").strip()
+REVU_MAX_PAGES = int(os.getenv("REVU_MAX_PAGES", "0"))  # 0 = total 만큼 끝까지
+
 # 지역 정규화: 내장 사전으로 못 잡는 역/랜드마크(예: 신용산역)를 카카오 로컬 API로 보정.
 # 비우면 내장 사전만 사용(미해결은 시/도까지만 또는 미표시). 무료 키: developers.kakao.com
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
