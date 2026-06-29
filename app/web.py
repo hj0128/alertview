@@ -24,7 +24,7 @@ WEB_REGIONS = [
     "전북", "전남", "광주", "경북", "경남", "대구", "울산", "부산", "제주",
 ]
 WEB_CATEGORIES = ["맛집", "뷰티", "여가", "배송", "배달", "페이백", "기자단", "기타"]
-WEB_CHANNELS = ["블로그", "릴스", "클립"]
+WEB_CHANNELS = ["블로그", "클립", "인스타", "릴스", "유튜브", "숏츠", "틱톡", "기타"]
 
 app = FastAPI(title="체험단 알림 설정")
 app.add_middleware(SessionMiddleware, secret_key=config.WEB_SECRET, max_age=60 * 60 * 24 * 30)
@@ -113,6 +113,7 @@ async def state(request: Request):
             "sites": [],
             "keywords": [], "regions": [], "categories": [], "channels": [],
             "max_competition": None, "max_dday": None,
+            "min_recruit": None, "max_applicants": None,
             "all_sites": WEB_SITES,
             "all_regions": WEB_REGIONS,
             "all_categories": WEB_CATEGORIES,
@@ -138,6 +139,8 @@ async def state(request: Request):
         "channels": f["channels"],
         "max_competition": f["max_competition"],
         "max_dday": f["max_dday"],
+        "min_recruit": f["min_recruit"],
+        "max_applicants": f["max_applicants"],
         "all_sites": WEB_SITES,
         "all_regions": WEB_REGIONS,
         "all_categories": WEB_CATEGORIES,
@@ -240,7 +243,8 @@ async def clear(request: Request):
     t = ((await request.json()).get("type") or "").strip()
     if t == "all":
         db.clear_filters(uid)                 # 모든 ftype(키워드·지역·사이트·카테고리·채널·스칼라) 삭제
-    elif t in ("site", "keyword", "region", "category", "channel", "max_competition", "max_dday"):
+    elif t in ("site", "keyword", "region", "category", "channel",
+               "max_competition", "max_dday", "min_recruit", "max_applicants"):
         db.clear_filters(uid, t)
     else:
         return JSONResponse({"error": "bad type"}, status_code=400)
@@ -258,7 +262,7 @@ def _normalize_payload(p: dict) -> dict:
     for k in _PRESET_KEYS:
         vals = p.get(k) or []
         out[k] = [str(x).strip() for x in vals if str(x).strip()][:50]
-    for k in ("max_competition", "max_dday"):
+    for k in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
         v = p.get(k)
         out[k] = v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
     return out
@@ -294,7 +298,7 @@ async def preset_apply(request: Request):
     for k in _PRESET_KEYS:
         for v in payload[k]:
             db.add_filter(uid, _PRESET_FTYPE[k], v)
-    for k in ("max_competition", "max_dday"):
+    for k in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
         if payload[k] is not None:
             db.set_scalar(uid, k, payload[k])
     return {"ok": True}
@@ -316,7 +320,7 @@ async def set_scalar(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     key = body.get("key")
-    if key not in ("max_competition", "max_dday"):
+    if key not in ("max_competition", "max_dday", "min_recruit", "max_applicants"):
         return JSONResponse({"error": "bad key"}, status_code=400)
     val = body.get("value")
     db.set_scalar(uid, key, val if val not in ("", None) else None)
@@ -359,6 +363,8 @@ async def campaigns(request: Request):
             "categories": _csv("cat"), "channels": _csv("ch"),
             "max_competition": _num("maxcomp"),
             "max_dday": int(md) if md is not None else None,
+            "min_recruit": (lambda v: int(v) if v is not None else None)(_num("minrec")),
+            "max_applicants": (lambda v: int(v) if v is not None else None)(_num("maxapp")),
         }
         viewed = set()
         fav_set = set()
@@ -432,7 +438,8 @@ async def campaigns(request: Request):
                 "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
 
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
-                      or f["channels"] or f["max_competition"] is not None or f["max_dday"] is not None)
+                      or f["channels"] or f["max_competition"] is not None or f["max_dday"] is not None
+                      or f["min_recruit"] is not None or f["max_applicants"] is not None)
 
     if not has_filter:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
@@ -453,7 +460,8 @@ async def campaigns(request: Request):
             recruit=r["recruit"], competition=r["competition"],
         )
         if not matches(c, f["keywords"], f["regions"], f["categories"], f["channels"],
-                       f["max_competition"], f["max_dday"], sites=f.get("sites") or []):
+                       f["max_competition"], f["max_dday"], sites=f.get("sites") or [],
+                       min_recruit=f["min_recruit"], max_applicants=f["max_applicants"]):
             continue
         d = _to_dict(r)
         if d["is_new"]:
@@ -670,17 +678,11 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 </div>
 
 <div class=card>
-  <h2>⚡ 빠른 설정</h2>
-  <div class=opts>
-    <button class=preset onclick="preset('comp')">🎯 당첨확률 UP (경쟁률 ≤ 1)</button>
-    <button class=preset onclick="preset('urgent')">⏰ 마감 임박 (D-3 이하)</button>
-    <button class=clearbtn onclick="clearAll()">🧹 전체 해제</button>
-  </div>
-  <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
-    <div class=guhd style="margin-bottom:8px">⭐ 내 검색 조건 (저장 후 한 번에 적용)</div>
-    <div class=chips id=presets></div>
-    <button class=savebtn onclick="savePreset()">＋ 지금 조건 저장</button>
-  </div>
+  <h2 style="display:flex;justify-content:space-between;align-items:center">⭐ 내 검색 조건
+    <button class=clearbtn onclick="clearAll()">🧹 전체 해제</button></h2>
+  <div class=guhd style="margin-bottom:8px">저장한 조건을 한 번에 적용</div>
+  <div class=chips id=presets></div>
+  <button class=savebtn onclick="savePreset()">＋ 지금 조건 저장</button>
 </div>
 
 <div class=card>
@@ -712,7 +714,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   <h2 style="display:flex;justify-content:space-between;align-items:center">채널 (콘텐츠 유형)
     <button class=clearbtn id=clrch onclick="clearFilter('channel','channels')" style="display:none">전체 해제</button></h2>
   <div class=opts id=channels></div>
-  <p class=muted>블로그·릴스(=인스타)·클립. 디너의여왕은 블로그가 기본이에요.</p>
+  <p class=muted>콘텐츠 유형으로 필터. 고른 채널만, 안 고르면 전체.</p>
 </div>
 
 <div class=card>
@@ -730,7 +732,11 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
     <input type=number step=0.1 min=0 id=maxcomp placeholder="예: 1" onchange="saveNum('max_competition','maxcomp')"></div>
   <div class=num><label>마감일 ≤</label>
     <input type=number min=0 id=maxdday placeholder="예: 3" onchange="saveNum('max_dday','maxdday')"></div>
-  <p class=muted>경쟁률 = 신청자÷모집인원. 낮을수록 당첨 확률↑. 비워두면 제한 없음.</p>
+  <div class=num><label>모집수 ≥</label>
+    <input type=number min=0 id=minrec placeholder="예: 10" onchange="saveNum('min_recruit','minrec')"></div>
+  <div class=num><label>지원수 ≤</label>
+    <input type=number min=0 id=maxapp placeholder="예: 20" onchange="saveNum('max_applicants','maxapp')"></div>
+  <p class=muted>경쟁률 = 신청자÷모집인원. 낮을수록 당첨 확률↑. 모집수 많고 지원수 적을수록 유리. 비워두면 제한 없음.</p>
 </div>
 </div>
 <div class=col-right>
@@ -788,6 +794,8 @@ function feedParams(){
     if(S.channels.length)p.set('ch',S.channels.join(','));
     if(S.max_competition!=null)p.set('maxcomp',S.max_competition);
     if(S.max_dday!=null)p.set('maxdday',S.max_dday);
+    if(S.min_recruit!=null)p.set('minrec',S.min_recruit);
+    if(S.max_applicants!=null)p.set('maxapp',S.max_applicants);
   }
   p.set('sort',feedSort);
   if(favOnly)p.set('fav','1');
@@ -979,7 +987,7 @@ async function clearFilter(type,key){   // 특정 필터 전체 해제(체험단
 }
 async function clearAll(){               // 완전 전체 해제(모든 조건)
   S.sites=[];S.keywords=[];S.regions=[];S.categories=[];S.channels=[];
-  S.max_competition=null;S.max_dday=null;curSido=null;
+  S.max_competition=null;S.max_dday=null;S.min_recruit=null;S.max_applicants=null;curSido=null;
   if(guest){refreshLocal();return;}
   await post('/api/clear',{type:'all'});await load();
 }
@@ -993,7 +1001,8 @@ function presetList(){
 function curPayload(){
   return {sites:S.sites||[],keywords:S.keywords||[],regions:S.regions||[],
           categories:S.categories||[],channels:S.channels||[],
-          max_competition:(S.max_competition??null),max_dday:(S.max_dday??null)};
+          max_competition:(S.max_competition??null),max_dday:(S.max_dday??null),
+          min_recruit:(S.min_recruit??null),max_applicants:(S.max_applicants??null)};
 }
 function renderPresets(){
   const c=document.getElementById('presets'); if(!c)return; c.innerHTML='';
@@ -1017,7 +1026,8 @@ async function savePreset(){
 async function applyPreset(name,payload){
   S.sites=payload.sites||[];S.keywords=payload.keywords||[];S.regions=payload.regions||[];
   S.categories=payload.categories||[];S.channels=payload.channels||[];
-  S.max_competition=(payload.max_competition??null);S.max_dday=(payload.max_dday??null);curSido=null;
+  S.max_competition=(payload.max_competition??null);S.max_dday=(payload.max_dday??null);
+  S.min_recruit=(payload.min_recruit??null);S.max_applicants=(payload.max_applicants??null);curSido=null;
   if(guest){refreshLocal();return;}
   await post('/api/preset/apply',{name}); await load();
 }
@@ -1039,7 +1049,7 @@ async function toggleSite(v){
 function render(){
   document.getElementById('hello').textContent = guest
     ? '키워드·지역으로 검색해 보세요. 알림으로 받고 싶으면 로그인하세요.'
-    : (S.name?S.name+' ':'')+'설정은 자동 저장돼요.';
+    : '설정은 자동 저장돼요.';
   document.getElementById('active').checked=!!S.active;
   renderSites();
   chips('kwchips',S.keywords,delKw);
@@ -1053,6 +1063,8 @@ function render(){
   renderPresets();
   document.getElementById('maxcomp').value=(S.max_competition??'');
   document.getElementById('maxdday').value=(S.max_dday??'');
+  document.getElementById('minrec').value=(S.min_recruit??'');
+  document.getElementById('maxapp').value=(S.max_applicants??'');
 }
 async function post(u,b){await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});}
 async function addKw(){const i=document.getElementById('kw');const v=i.value.trim();if(!v)return;
@@ -1075,19 +1087,6 @@ async function toggleActive(){await post('/api/active',{active:document.getEleme
 async function saveNum(key,elId){const raw=document.getElementById(elId).value;const v=(raw===''?null:raw);
   if(guest){S[key]=(v===null?null:parseFloat(v));refreshLocal();return;}
   await post('/api/scalar',{key:key,value:v});await load();}
-async function preset(kind){
-  if(guest){
-    if(kind==='comp')S.max_competition=1;
-    else if(kind==='urgent')S.max_dday=3;
-    else if(kind==='reset'){S.max_competition=null;S.max_dday=null;}
-    refreshLocal();return;
-  }
-  if(kind==='comp'){await post('/api/scalar',{key:'max_competition',value:1});}
-  else if(kind==='urgent'){await post('/api/scalar',{key:'max_dday',value:3});}
-  else if(kind==='reset'){await post('/api/scalar',{key:'max_competition',value:null});
-    await post('/api/scalar',{key:'max_dday',value:null});}
-  await load();
-}
 load();
 setInterval(checkNew, 30000);   // 30초마다 새 캠페인 유무만 확인(목록은 그대로)
 </script></body></html>"""

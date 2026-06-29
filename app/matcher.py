@@ -60,6 +60,17 @@ def category_of(stored: str, text: str) -> str:
     return s if s in CANONICAL else classify(text)
 
 
+# 알려진 콘텐츠 채널(이 중 어디에도 안 걸리면 '기타'로 본다).
+KNOWN_CHANNELS = ["블로그", "클립", "인스타", "릴스", "유튜브", "숏폼", "숏츠", "틱톡"]
+
+
+def _channel_hit(ch: str, text: str) -> bool:
+    # '기타' = 알려진 채널 어디에도 안 걸리는 캠페인. 글자 '기타'(악기 등) 부분일치로 잡지 않는다.
+    if ch == "기타":
+        return not any(k in text for k in KNOWN_CHANNELS)
+    return ch in text
+
+
 def matches(
     c: Campaign,
     keywords: List[str] = (),
@@ -69,6 +80,8 @@ def matches(
     max_competition: Optional[float] = None,
     max_dday: Optional[int] = None,
     sites: List[str] = (),
+    min_recruit: Optional[int] = None,
+    max_applicants: Optional[int] = None,
 ) -> bool:
     if sites and c.site not in sites:
         return False
@@ -84,10 +97,14 @@ def matches(
             return False
     if categories and category_of(c.category, text) not in categories:
         return False
-    if channels and not any(ch in text for ch in channels):
+    if channels and not any(_channel_hit(ch, text) for ch in channels):
         return False
     if max_competition is not None and c.competition is not None and c.competition > max_competition:
         return False
     if max_dday is not None and c.dday is not None and c.dday > max_dday:
+        return False
+    if min_recruit is not None and c.recruit is not None and c.recruit < min_recruit:
+        return False
+    if max_applicants is not None and c.applicants is not None and c.applicants > max_applicants:
         return False
     return True

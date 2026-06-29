@@ -418,6 +418,9 @@ def get_all_filters(chat_id: int) -> dict:
             return float(v)
         except (TypeError, ValueError):
             return None
+    def _i(v):
+        f = _f(v)
+        return int(f) if f is not None else None
     md = get_scalar(chat_id, "max_dday")
     return {
         "sites": list_values(chat_id, "site"),
@@ -427,6 +430,8 @@ def get_all_filters(chat_id: int) -> dict:
         "channels": list_values(chat_id, "channel"),
         "max_competition": _f(get_scalar(chat_id, "max_competition")),
         "max_dday": int(_f(md)) if md not in (None, "") else None,
+        "min_recruit": _i(get_scalar(chat_id, "min_recruit")),
+        "max_applicants": _i(get_scalar(chat_id, "max_applicants")),
     }
 
 
