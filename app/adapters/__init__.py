@@ -14,6 +14,7 @@ from .assaview import AssaviewAdapter
 from .ringble import RingbleAdapter
 from .demo import DemoAdapter
 from .revu import RevuAdapter
+from .gaboja import GabojaAdapter
 
 ALL_ADAPTERS = [
     DinnerQueenAdapter(),
@@ -26,6 +27,7 @@ ALL_ADAPTERS = [
     AssaviewAdapter(),
     RingbleAdapter(),
     RevuAdapter(),
+    GabojaAdapter(),
 ]
 
 
