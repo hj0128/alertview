@@ -21,7 +21,7 @@ from .base import BaseAdapter, Campaign, guess_region, UA
 
 BASE = "https://xn--939au0g4vj8sq.net"            # 강남맛집.net
 TPL = BASE + "/theme/go/_list_cmp_tpl.php?ca={ca}&rpage={rpage}&row_num=28"
-MAX_PAGES = 100                                   # ca 당 안전 상한(빈 페이지면 그 전에 종료)
+MAX_PAGES = 250                                   # ca 당 안전 상한(빈 페이지면 그 전에 종료; 맛집이 130+page)
 # 소스 세부 카테고리(ca) → 우리 표준 카테고리. '소스가 담아둔 분류'를 그대로 따른다.
 #   지역(20): 맛집/뷰티/숙박/문화/배달/포장/기타 · 제품(30): 뷰티/패션/식품/생활/기타 · 기자단(40)
 CATS = {
