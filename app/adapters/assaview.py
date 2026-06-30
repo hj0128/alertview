@@ -99,10 +99,17 @@ def _parse(html: str) -> List[Campaign]:
                 thumb = _abs(s)
                 break
 
+        region = guess_region(subject)
+        # 아싸뷰는 배송 제품 위주. 제목으로 분류해 구체 카테고리(뷰티 앰플 등)는 살리되,
+        # 못 잡으면(키워드 없음) 지역 없는 건 배송 제품으로 본다.
+        from ..matcher import classify
+        cat = classify(subject)
+        if cat == "기타" and not region:
+            cat = "배송"
         out.append(Campaign(
             site="assaview", site_name="아싸뷰", cid=cid, title=subject,
             url=f"{BASE}/campaign.php?cp_id={cid}",
-            region=guess_region(subject), category="", channel=_channel(li),
+            region=region, category=cat, channel=_channel(li),
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=thumb, extra=(f"D-{dday}" if dday is not None else ""),
         ))
