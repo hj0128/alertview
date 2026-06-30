@@ -505,11 +505,11 @@ def record_campaign(c) -> None:
     else:
         category = classify(" ".join([c.title or "", c.category or "",
                                        c.channel or "", getattr(c, "extra", "") or ""]))
-        # 키워드로 못 잡은 경우: 지역(오프라인 매장) 있으면 대부분 식당 → 맛집,
-        # 지역 없으면(온라인) 대부분 배송 제품 → 배송.
-        # (페이백·기자단·교육 등은 위에서 먼저 잡히므로 남는 무지역·무키워드는 사실상 제품)
-        if category == "기타":
-            category = "맛집" if region else "배송"
+        # 키워드로 못 잡았는데 '지역(오프라인 방문 매장)'이 있으면 → 대부분 식당이므로 맛집.
+        # (네일·헬스·카페·숙박 등은 위 키워드에서 먼저 잡히고, 남는 무키워드 방문은 거의 식당)
+        # 지역이 없으면(온라인) 분류를 강제하지 않고 기타로 둔다.
+        if category == "기타" and region:
+            category = "맛집"
     with _lock:
         _c().execute(_q(
             "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "
