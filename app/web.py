@@ -535,7 +535,8 @@ def _login_html() -> str:
     widget = _widget_html("large")
     return f"""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>체험단 알림</title>
+<title>alertview</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMzYjZlZjYiLz48cGF0aCBkPSJNMjAgNDYgTDMyIDE4IEw0NCA0NiBNMjQuNSAzOCBIMzkuNSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZmlsbD0ibm9uZSIvPjwvc3ZnPg==">
 <style>
  body{{font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f5f6f8;margin:0}}
  main{{max-width:440px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;
@@ -554,7 +555,8 @@ def _app_html() -> str:
 
 _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>내 알림 설정</title>
+<title>alertview</title>
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMzYjZlZjYiLz48cGF0aCBkPSJNMjAgNDYgTDMyIDE4IEw0NCA0NiBNMjQuNSAzOCBIMzkuNSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZmlsbD0ibm9uZSIvPjwvc3ZnPg==">
 <style>
  :root{
    --blue:#3b6ef6;--blue-d:#2b59d6;
