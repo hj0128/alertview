@@ -497,10 +497,17 @@ def record_campaign(c) -> None:
     if not region and getattr(c, "region", ""):
         region = normalize_offline(c.region) or region_cache_get(c.region) or ""
     # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로 신뢰(예: 강남맛집 ca 매핑),
-    # 아니면(빈값·'여행'·'식품'…) 키워드로 분류.
+    # 아니면(빈값·'여행'·'식품'…) 키워드로 분류. extra(제공내역·해시태그 등)도 분류 신호로 사용.
     from .matcher import classify, CANONICAL
-    category = c.category if c.category in CANONICAL else \
-        classify(" ".join([c.title or "", c.category or "", c.channel or ""]))
+    if c.category in CANONICAL:
+        category = c.category
+    else:
+        category = classify(" ".join([c.title or "", c.category or "",
+                                       c.channel or "", getattr(c, "extra", "") or ""]))
+        # 키워드로 못 잡았는데 '지역(오프라인 방문 매장)'이 있으면 → 대부분 식당이므로 맛집.
+        # (네일·헬스·카페·숙박 등은 위 키워드에서 먼저 잡히고, 남는 무키워드 방문은 거의 식당)
+        if category == "기타" and region:
+            category = "맛집"
     with _lock:
         _c().execute(_q(
             "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "
