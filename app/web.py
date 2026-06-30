@@ -6,7 +6,7 @@ import hmac
 import json
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -337,9 +337,11 @@ async def set_active(request: Request):
 
 
 @app.get("/api/campaigns")
-async def campaigns(request: Request):
+async def campaigns(request: Request, response: Response):
     """필터에 맞는 최근 캠페인 전체(최신순) + NEW 여부.
     비로그인(게스트)이면 필터 없이 전체를 보여주고 NEW 표시는 하지 않는다."""
+    # D-day 는 매 요청 시 마감일-오늘로 계산되므로, 응답을 캐시하면 옛 D-day 가 보인다 → no-store.
+    response.headers["Cache-Control"] = "no-store"
     uid = _uid(request)
     guest = not uid
     if guest:
@@ -1096,4 +1098,14 @@ async function saveNum(key,elId){const raw=document.getElementById(elId).value;c
   await post('/api/scalar',{key:key,value:v});await load();}
 load();
 setInterval(checkNew, 30000);   // 30초마다 새 캠페인 유무만 확인(목록은 그대로)
+// D-day 는 서버가 마감일-오늘로 매번 계산하지만, 탭을 켜둔 채 날짜가 바뀌면 화면값이 안 바뀐다.
+// 자정을 넘겼거나(날짜 변경) 탭에 다시 돌아오면 목록을 다시 그려 D-day 를 최신으로.
+let _loadDay=new Date().toDateString();
+function refreshIfStale(){
+  if(document.hidden||feedLoading) return;
+  if(new Date().toDateString()!==_loadDay){ _loadDay=new Date().toDateString(); loadCampaigns(true); }
+}
+document.addEventListener('visibilitychange',refreshIfStale);
+window.addEventListener('focus',refreshIfStale);
+setInterval(refreshIfStale, 60000);   // 1분마다 날짜 변경(자정) 감지 → 갱신
 </script></body></html>"""
