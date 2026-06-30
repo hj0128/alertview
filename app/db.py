@@ -496,7 +496,8 @@ def record_campaign(c) -> None:
     # 제목에서 지역을 못 찾으면 어댑터가 직접 준 region(예: 레뷰 API 의 venue 주소·local 태그)을 사용.
     if not region and getattr(c, "region", ""):
         region = normalize_offline(c.region) or region_cache_get(c.region) or ""
-    # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로, 아니면(빈값·'여행'·'식품'…) 키워드로 분류.
+    # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로 신뢰(예: 강남맛집 ca 매핑),
+    # 아니면(빈값·'여행'·'식품'…) 키워드로 분류.
     from .matcher import classify, CANONICAL
     category = c.category if c.category in CANONICAL else \
         classify(" ".join([c.title or "", c.category or "", c.channel or ""]))

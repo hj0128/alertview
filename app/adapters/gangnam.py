@@ -1,9 +1,10 @@
-"""강남맛집체험단(강남맛집.net = xn--939au0g4vj8sq.net) 어댑터.
+"""강남맛집체험단(강남맛집.net = xn--939au0g4vj8sq.net) 어댑터. GnuBoard 'go' 테마.
 
-cometoplay 와 같은 GnuBoard 'go' 테마. 목록은 AJAX 템플릿으로 페이징.
-  GET /theme/go/_list_cmp_tpl.php?startnum=<offset>&endnum=<개수>
-응답 카드(.list_item): .tit a[/cp/?id=N](제목, 지역은 제목 대괄호), .sub_tit,
-  .label em(채널/유형), .dday(D-day), .numb(신청/모집), img(썸네일 //gangnam-review.net/...)
+목록 AJAX: GET /theme/go/_list_cmp_tpl.php?ca=<카테고리>&rpage=<page>&row_num=28
+  - 페이지네이션은 rpage(1-base)+row_num. (startnum 방식은 더 이상 동작 안 함)
+  - ca 는 소스의 세부 카테고리 코드. 각 ca 를 순회해 캠페인을 '소스가 분류한 대로' 태깅한다.
+카드(.list_item): .tit a[/cp/?id=N](제목, 지역은 제목 대괄호), .sub_tit, .label em(채널),
+  .dday(D-day), .numb(신청/모집), img(썸네일).
 """
 from __future__ import annotations
 
@@ -19,8 +20,16 @@ from .. import config
 from .base import BaseAdapter, Campaign, guess_region, UA
 
 BASE = "https://xn--939au0g4vj8sq.net"            # 강남맛집.net
-TPL = BASE + "/theme/go/_list_cmp_tpl.php?startnum={start}&endnum={cnt}"
-PAGE = 30
+TPL = BASE + "/theme/go/_list_cmp_tpl.php?ca={ca}&rpage={rpage}&row_num=28"
+MAX_PAGES = 100                                   # ca 당 안전 상한(빈 페이지면 그 전에 종료)
+# 소스 세부 카테고리(ca) → 우리 표준 카테고리. '소스가 담아둔 분류'를 그대로 따른다.
+#   지역(20): 맛집/뷰티/숙박/문화/배달/포장/기타 · 제품(30): 뷰티/패션/식품/생활/기타 · 기자단(40)
+CATS = {
+    "2005": "맛집", "2010": "뷰티", "2015": "여가", "2020": "여가",
+    "2025": "배달", "2030": "포장", "2035": "기타",
+    "3005": "뷰티", "3010": "배송", "3015": "배송", "3020": "배송", "3030": "배송",
+    "4005": "기자단", "4025": "기자단",
+}
 _ID_RE = re.compile(r"id=(\d+)")
 _DAY_RE = re.compile(r"(\d+)\s*일\s*남음")
 _APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*/\s*모집\s*([\d,]+)")
@@ -45,7 +54,7 @@ def _channel(it) -> str:
     return "블로그"
 
 
-def _parse(html: str) -> List[Campaign]:
+def _parse(html: str, category: str) -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out = []
     for it in soup.select(".list_item"):
@@ -88,7 +97,7 @@ def _parse(html: str) -> List[Campaign]:
         out.append(Campaign(
             site="gangnam", site_name="강남맛집", cid=cid, title=title.strip(),
             url=f"{BASE}/cp/?id={cid}",
-            region=guess_region(title0), category="", channel=_channel(it),
+            region=guess_region(title0), category=category, channel=_channel(it),
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
         ))
@@ -102,7 +111,6 @@ class GangnamAdapter(BaseAdapter):
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         out, seen = [], set()
-        cap = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500
         headers = {"User-Agent": UA, "X-Requested-With": "XMLHttpRequest",
                    "Referer": BASE + "/cp/"}
         try:
@@ -110,27 +118,23 @@ class GangnamAdapter(BaseAdapter):
         except Exception as e:
             log.warning("[gangnam] 초기 GET 실패(무시): %s", e)
         log.info("[gangnam] 수집 시작...")
-        start = 0
-        for _ in range(cap):
-            try:
-                html = await self.get(client, TPL.format(start=start, cnt=PAGE), headers=headers)
-            except Exception as e:
-                log.warning("[gangnam] start=%d 요청 실패(중단): %s", start, e)
-                raise
-            cards = _parse(html)
-            if not cards:
-                break
-            page_new = [c for c in cards if c.cid not in seen]
-            for c in page_new:
-                seen.add(c.cid)
-            out.extend(page_new)
-            keep = True
-            if on_page and page_new:
-                keep = on_page(page_new)
-            log.info("[gangnam] start=%d +%d건 (누적 %d건)", start, len(page_new), len(out))
-            start += len(cards)            # 실제 반환 개수만큼 전진(누락 방지)
-            if keep is False:
-                break
-            await asyncio.sleep(0.3)
+        for ca, cat in CATS.items():
+            n0 = len(out)
+            for rpage in range(1, MAX_PAGES + 1):
+                try:
+                    html = await self.get(client, TPL.format(ca=ca, rpage=rpage), headers=headers)
+                except Exception as e:
+                    log.warning("[gangnam] ca=%s rpage=%d 실패(중단): %s", ca, rpage, e)
+                    break
+                page_new = [c for c in _parse(html, cat) if c.cid not in seen]
+                if not page_new:                 # 빈 페이지 또는 더 이상 새 항목 없음 → 다음 ca
+                    break
+                for c in page_new:
+                    seen.add(c.cid)
+                out.extend(page_new)
+                if on_page:
+                    on_page(page_new)
+                await asyncio.sleep(0.3)
+            log.info("[gangnam] ca=%s(%s) +%d건 (누적 %d건)", ca, cat, len(out) - n0, len(out))
         log.info("[gangnam] 수집 완료 (총 %d건)", len(out))
         return out
