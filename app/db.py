@@ -499,7 +499,8 @@ def record_campaign(c) -> None:
     # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로 신뢰(예: 강남맛집 ca 매핑),
     # 아니면(빈값·'여행'·'식품'…) 키워드로 분류. extra(제공내역·해시태그 등)도 분류 신호로 사용.
     from .matcher import classify, CANONICAL
-    if c.category in CANONICAL:
+    # 소스가 '기타'를 준 건 정보가 없는 것 → 신뢰하지 말고 직접 분류(예: 리뷰노트 '기타'에 헬스·청소·타로 등).
+    if c.category in CANONICAL and c.category != "기타":
         category = c.category
     else:
         category = classify(" ".join([c.title or "", c.category or "",
