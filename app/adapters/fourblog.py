@@ -60,6 +60,17 @@ def _to_campaign(x: dict) -> Optional[Campaign]:
     loc = re.sub(r"[\[\]]", "", loc_raw).replace("/", " ").strip()  # → '수원시 인계동'
     cat1 = (x.get("CATEGORY1") or "").lower()
     title = ((loc_raw + " " if loc_raw else "") + name).strip()
+    # 4blog 은 음식/업종 카테고리가 없음 → 제목+키워드(해시태그)+제공내역으로 분류.
+    # deliv→배송, reporter→기자단(고정). local(방문)은 분류하되, 못 잡으면 맛집 기본값(방문형 대부분 식당).
+    if cat1 == "deliv":
+        category = "배송"
+    elif cat1 == "reporter":
+        category = "기자단"
+    else:
+        from ..matcher import classify          # 지연 import(순환 참조 방지)
+        blob = " ".join([name, x.get("KEYWORD") or "", x.get("REVIEWER_BENEFIT") or ""])
+        c = classify(blob)
+        category = c if c != "기타" else "맛집"
     recruit = _to_int(x.get("REVIEWER_CNT"))
     applicants = _to_int(x.get("REVIEWER_REQ_CNT"))
     competition = round(applicants / recruit, 1) if recruit and applicants is not None else None
@@ -70,7 +81,7 @@ def _to_campaign(x: dict) -> Optional[Campaign]:
         site="4blog", site_name="포블로그", cid=str(cid), title=title,
         url=f"{BASE}/campaign/{cid}/",
         region=loc if cat1 == "local" else "",
-        category=_CAT1.get(cat1, ""), channel=_channel(x.get("CATEGORY")),
+        category=category, channel=_channel(x.get("CATEGORY")),
         dday=_to_int(x.get("REMAINDATE")),
         applicants=applicants, recruit=recruit, competition=competition, image=img,
     )
