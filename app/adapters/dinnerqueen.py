@@ -53,7 +53,7 @@ def _pick_img(node) -> str:
     return ""
 
 
-def _parse_page(html: str) -> List[Campaign]:
+def _parse_page(html: str, category: str = "") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out, seen = [], set()
     for a in soup.select('a[href*="/taste/"]'):
@@ -88,7 +88,7 @@ def _parse_page(html: str) -> List[Campaign]:
                 competition = round(applicants / recruit, 1)
         out.append(Campaign(
             site="dinnerqueen", site_name="디너의여왕", cid=cid, title=title, url=url,
-            region=guess_region(title), category=guess_in(blob, CATEGORIES),
+            region=guess_region(title), category=category,
             channel=("클립" if "클립" in blob else "릴스" if "릴스" in blob else "블로그"),
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
@@ -99,31 +99,31 @@ def _parse_page(html: str) -> List[Campaign]:
 class DinnerQueenAdapter(BaseAdapter):
     key = "dinnerqueen"
     name = "디너의여왕"
+    prunable = True
+    CATS = ["맛집", "여가", "뷰티", "페이백", "기자단", "배송"]
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         out, seen = [], set()
         limit = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500  # 0=끝까지(안전상한 500)
         log.info("[dinnerqueen] 수집 시작...")
-        for page in range(1, limit + 1):
-            url = LIST_URL if page == 1 else f"{LIST_URL}&page={page}"
-            try:
-                html = await self.get(client, url)
-            except Exception as e:
-                log.warning("[dinnerqueen] %d\ud398\uc774\uc9c0 \uc694\uccad \uc2e4\ud328(\uc911\ub2e8): %s", page, e)
-                raise
-            page_new = [c for c in _parse_page(html) if c.cid not in seen]
-            for c in page_new:
-                seen.add(c.cid)
-            out.extend(page_new)
-            keep = True
-            if on_page and page_new:
-                keep = on_page(page_new)  # 즉시 저장 + 계속 여부
-            log.info("[dinnerqueen] %d페이지 +%d건 (누적 %d건)", page, len(page_new), len(out))
-            if not page_new:
-                log.info("[dinnerqueen] 마지막 페이지 → 종료 (총 %d건)", len(out))
-                break
-            if keep is False:
-                log.info("[dinnerqueen] 새 캠페인 없음 → 조기 종료 (%d건 확인)", len(out))
-                break
-            await asyncio.sleep(0.3)
+        for ct in self.CATS:
+            n0 = len(out)
+            for page in range(1, limit + 1):
+                from urllib.parse import quote
+                url = f"{BASE}/taste?ct={quote(ct)}" + ("" if page == 1 else f"&page={page}")
+                try:
+                    html = await self.get(client, url)
+                except Exception as e:
+                    log.warning("[dinnerqueen] ct=%s p%d fail: %s", ct, page, e)
+                    raise
+                page_new = [c for c in _parse_page(html, ct) if c.cid not in seen]
+                for c in page_new:
+                    seen.add(c.cid)
+                out.extend(page_new)
+                if on_page and page_new:
+                    on_page(page_new)
+                if not page_new:
+                    break
+                await asyncio.sleep(0.3)
+            log.info("[dinnerqueen] ct=%s acc %d", ct, len(out))
         return out

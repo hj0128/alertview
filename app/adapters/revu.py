@@ -62,12 +62,15 @@ def _to_campaign(it: dict) -> Optional[Campaign]:
     recruit = _to_int(it.get("reviewerLimit"))
     applicants = _to_int((it.get("campaignStats") or {}).get("requestCount"))
     competition = round(applicants / recruit, 1) if recruit and applicants is not None else None
+    # 레뷰 category 배열의 첫 값이 내용 카테고리(맛집/뷰티샵/카페/숙박…). 우리 표준으로 매핑해 폴백 제공.
+    from ..matcher import classify          # 지연 import(순환 참조 방지)
     cat = it.get("category") or []
+    cat_text = " ".join(map(str, cat)) if isinstance(cat, list) else str(cat or "")
     return Campaign(
         site="revu", site_name="레뷰", cid=str(cid), title=title,
         url=f"{WWW}/campaign/{cid}",
         region=_region_of(it),
-        category=" ".join(map(str, cat)) if isinstance(cat, list) else str(cat or ""),
+        category=classify(cat_text),
         channel=_MEDIA.get((it.get("media") or "").lower(), ""),
         dday=_to_int(it.get("byDeadline")),
         applicants=applicants, recruit=recruit, competition=competition,

@@ -496,20 +496,17 @@ def record_campaign(c) -> None:
     # 제목에서 지역을 못 찾으면 어댑터가 직접 준 region(예: 레뷰 API 의 venue 주소·local 태그)을 사용.
     if not region and getattr(c, "region", ""):
         region = normalize_offline(c.region) or region_cache_get(c.region) or ""
-    # 카테고리: 어댑터가 준 값이 표준(8종)이면 그대로 신뢰(예: 강남맛집 ca 매핑),
-    # 아니면(빈값·'여행'·'식품'…) 키워드로 분류. extra(제공내역·해시태그 등)도 분류 신호로 사용.
+    # 카테고리 결정 순서: ① 내용(제목·해시태그 등) 키워드 분류 → ② 안 되면 어댑터가 준 소스 카테고리/유형
+    # (배송·기자단 등) 폴백 → ③ 그것도 없으면 '기타'. 유형이 내용을 덮어쓰지 않게 내용을 우선한다
+    # (예: '피부과'는 사이트 유형이 배송형이어도 뷰티). 억지로 맛집 등으로 추측하지 않음.
     from .matcher import classify, CANONICAL
-    # 소스가 '기타'를 준 건 정보가 없는 것 → 신뢰하지 말고 직접 분류(예: 리뷰노트 '기타'에 헬스·청소·타로 등).
-    if c.category in CANONICAL and c.category != "기타":
+    classified = classify(" ".join([c.title or "", c.channel or "", getattr(c, "extra", "") or ""]))
+    if classified != "기타":
+        category = classified
+    elif (c.category or "") in CANONICAL and c.category != "기타":
         category = c.category
     else:
-        category = classify(" ".join([c.title or "", c.category or "",
-                                       c.channel or "", getattr(c, "extra", "") or ""]))
-        # 키워드로 못 잡았는데 '지역(오프라인 방문 매장)'이 있으면 → 대부분 식당이므로 맛집.
-        # (네일·헬스·카페·숙박 등은 위 키워드에서 먼저 잡히고, 남는 무키워드 방문은 거의 식당)
-        # 지역이 없으면(온라인) 분류를 강제하지 않고 기타로 둔다.
-        if category == "기타" and region:
-            category = "맛집"
+        category = "기타"
     with _lock:
         _c().execute(_q(
             "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "

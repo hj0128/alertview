@@ -100,12 +100,13 @@ def _parse(html: str) -> List[Campaign]:
                 break
 
         region = guess_region(subject)
-        # 아싸뷰는 배송 제품 위주. 제목으로 분류해 구체 카테고리(뷰티 앰플 등)는 살리되,
-        # 못 잡으면(키워드 없음) 지역 없는 건 배송 제품으로 본다.
-        from ..matcher import classify
-        cat = classify(subject)
-        if cat == "기타" and not region:
-            cat = "배송"
+        # 소스 유형(구매형/배송형→배송, 기자단, 포장형→포장)을 폴백으로. 내용 분류는 record_campaign 이
+        # 제목으로 먼저 수행(피부과·앰플 등은 그쪽에서 뷰티로). 유형도 내용도 없으면 기타.
+        cat = ""
+        for _t, _v in (("배송형", "배송"), ("구매형", "배송"), ("포장형", "포장"), ("기자단", "기자단")):
+            if _t in txt:
+                cat = _v
+                break
         out.append(Campaign(
             site="assaview", site_name="아싸뷰", cid=cid, title=subject,
             url=f"{BASE}/campaign.php?cp_id={cid}",

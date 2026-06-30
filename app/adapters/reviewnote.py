@@ -54,8 +54,10 @@ def _to_campaign(o: dict) -> Optional[Campaign]:
     # paybackPlatform 이 있으면 구매 후 환급 = 페이백(제목엔 안 드러남).
     if o.get("paybackPlatform"):
         category = "페이백"
-    elif sort == "DELIVERY":
+    elif sort in ("DELIVERY", "TAKEOUT"):   # DELIVERY=배송형, TAKEOUT=구매형(재택 제품 구매)
         category = "배송"
+    elif sort == "REPORTER":
+        category = "기자단"
     else:
         category = cat
 

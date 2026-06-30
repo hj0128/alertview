@@ -71,9 +71,9 @@ def _to_campaign(x: dict) -> Optional[Campaign]:
         category = "기자단"
     else:
         from ..matcher import classify          # 지연 import(순환 참조 방지)
+        # 방문(local): 제목+해시태그+제공내역으로 분류. 못 잡으면 기타(억지로 맛집으로 넣지 않음).
         blob = " ".join([name, x.get("KEYWORD") or "", x.get("REVIEWER_BENEFIT") or ""])
-        c = classify(blob)
-        category = c if c != "기타" else "맛집"
+        category = classify(blob)
     recruit = _to_int(x.get("REVIEWER_CNT"))
     applicants = _to_int(x.get("REVIEWER_REQ_CNT"))
     competition = round(applicants / recruit, 1) if recruit and applicants is not None else None

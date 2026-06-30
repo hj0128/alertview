@@ -32,8 +32,8 @@ log = logging.getLogger(__name__)
 _CH_RULES = [("REELS", "릴스"), ("SHORTS", "숏츠"), ("CLIP", "클립"),
              ("YOUTUBE", "유튜브"), ("INSTAGRAM", "인스타"), ("BLOG", "블로그")]
 # CT_type(콘텐츠 분류) → 표준 카테고리(방문형일 때만 사용)
-_CT_CAT = {"RESTAURANT": "맛집", "CAFE": "카페", "FOOD": "맛집",
-           "ROOMS": "숙박", "LEISURE": "문화", "BEAUTY": "뷰티"}
+_CT_CAT = {"RESTAURANT": "맛집", "CAFE": "맛집", "FOOD": "맛집",
+           "ROOMS": "여가", "LEISURE": "여가", "BEAUTY": "뷰티"}
 
 
 def _to_int(v) -> Optional[int]:
