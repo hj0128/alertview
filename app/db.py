@@ -597,6 +597,27 @@ def purge_expired(grace_days: int = 3) -> int:
         return cur.rowcount
 
 
+def active_cids(site: str) -> set:
+    """해당 사이트의 '활성(마감 전·미상)' 캠페인 cid 집합."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT cid FROM seen WHERE site=? AND (deadline IS NULL OR deadline>=?)"),
+            (site, _today())).fetchall()
+    return {r["cid"] for r in rows}
+
+
+def delete_campaigns(site: str, cids) -> int:
+    """해당 사이트의 지정 cid 들을 삭제. 반환: 삭제 건수."""
+    cids = list(cids)
+    if not cids:
+        return 0
+    with _lock:
+        for cid in cids:
+            _c().execute(_q("DELETE FROM seen WHERE site=? AND cid=?"), (site, cid))
+        _c().commit()
+    return len(cids)
+
+
 def count_seen_new(date_prefix: str) -> int:
     """first_seen 이 오늘인(=NEW) 캠페인 수."""
     with _lock:

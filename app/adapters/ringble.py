@@ -108,6 +108,7 @@ class RingbleAdapter(BaseAdapter):
     key = "ringble"
     name = "링블"
     enabled = True
+    prunable = True          # 카테고리별 전체 목록 완주 → 소스에서 내려간 건 자동 삭제 가능
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         out, seen = [], set()

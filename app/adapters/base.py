@@ -65,6 +65,9 @@ class BaseAdapter:
     key: str = ""
     name: str = ""
     enabled: bool = True
+    # 매 수집마다 '현재 소스 목록 전체'를 완주하는 어댑터만 True.
+    # True 인 경우에만 poller 가 '이번 수집에 안 보인 활성 캠페인'을 자동 삭제(소스에서 내려간 것 정리).
+    prunable: bool = False
 
     async def fetch(self, client: "httpx.AsyncClient", on_page=None) -> List[Campaign]:
         """on_page(list)->bool: 페이지 수집 즉시 호출. False 반환 시 조기 종료."""

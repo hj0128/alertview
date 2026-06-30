@@ -25,11 +25,13 @@ async def collect_new(demo: bool) -> List[Campaign]:
         for ad in active_adapters(demo):
             deep = not db.backfill_done(ad.key)   # 백필 미완료면 전체 크롤(알림 억제)
             stats = {"fresh": 0}
+            seen_cids = set()                      # 이번 수집에서 본 cid(자동 정리용)
 
-            def on_page(items, ad=ad, deep=deep, stats=stats) -> bool:
+            def on_page(items, ad=ad, deep=deep, stats=stats, seen_cids=seen_cids) -> bool:
                 db_new = 0
                 for c in items:
                     seen = db.is_seen(c.site, c.cid)
+                    seen_cids.add(c.cid)
                     db.record_campaign(c)          # 항상 저장/갱신(변동값 최신화)
                     if seen:
                         continue                   # 이미 본 건: 갱신만 하고 신규 카운트 제외
@@ -50,7 +52,31 @@ async def collect_new(demo: bool) -> List[Campaign]:
                 db.set_backfill_done(ad.key)       # 전체 크롤 정상 완료 → 이후 증분 모드
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
                      " (전체 백필: 알림생략)" if deep else "")
+            _prune_unseen(ad, seen_cids)           # 소스에서 내려간 활성 캠페인 자동 삭제
     return new_items
+
+
+_PRUNE_MIN_RATIO = 0.5     # 이번 수집량이 기존 활성의 이 비율 미만이면 정리 보류(부분수집 오삭제 방지)
+
+
+def _prune_unseen(ad, seen_cids: set) -> None:
+    """전체 목록을 완주하는(prunable) 어댑터에 한해, 이번 수집에서 안 보인 활성 캠페인을 삭제.
+    = 소스에서 내려간(마감/삭제된) 캠페인 정리. 부분수집(네트워크 장애 등) 시 대량 오삭제를
+    막기 위해, 수집량이 기존 활성의 절반 미만이거나 어댑터가 부분/만료 상태면 건너뛴다."""
+    if not getattr(ad, "prunable", False):
+        return
+    if getattr(ad, "partial", False) or getattr(ad, "cookie_expired", False):
+        log.info("[%s] 부분 수집 상태 → 자동 정리 보류", ad.key)
+        return
+    active = db.active_cids(ad.key)
+    if len(seen_cids) < max(10, int(len(active) * _PRUNE_MIN_RATIO)):
+        log.warning("[%s] 수집량(%d)이 기존 활성(%d)의 절반 미만 → 자동 정리 보류(부분수집 의심)",
+                    ad.key, len(seen_cids), len(active))
+        return
+    stale = active - seen_cids
+    if stale:
+        deleted = db.delete_campaigns(ad.key, stale)
+        log.info("[%s] 소스에서 내려간 캠페인 %d건 자동 삭제", ad.key, deleted)
 
 
 _mrblog_alerted = False    # 쿠키 만료 알림 중복 방지(만료 상태 동안 1회만)

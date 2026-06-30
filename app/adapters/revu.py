@@ -79,6 +79,7 @@ class RevuAdapter(BaseAdapter):
     key = "revu"
     name = "레뷰"
     enabled = bool(config.REVU_USERNAME and config.REVU_PASSWORD)
+    prunable = True          # type=play 전체를 total 까지 완주 → 소스에서 내려간 건 자동 삭제 가능
 
     def __init__(self) -> None:
         self._token: Optional[str] = None
