@@ -61,8 +61,11 @@ def _to_campaign(x: dict) -> Optional[Campaign]:
     cat1 = (x.get("CATEGORY1") or "").lower()
     title = ((loc_raw + " " if loc_raw else "") + name).strip()
     # 4blog 은 음식/업종 카테고리가 없음 → 제목+키워드(해시태그)+제공내역으로 분류.
-    # deliv→배송, reporter→기자단(고정). local(방문)은 분류하되, 못 잡으면 맛집 기본값(방문형 대부분 식당).
-    if cat1 == "deliv":
+    # PAYBACK(환급금액) 있으면 페이백. deliv→배송, reporter→기자단(고정).
+    # local(방문)은 분류하되, 못 잡으면 맛집 기본값(방문형 대부분 식당).
+    if _to_int(x.get("PAYBACK")):
+        category = "페이백"
+    elif cat1 == "deliv":
         category = "배송"
     elif cat1 == "reporter":
         category = "기자단"

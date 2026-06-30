@@ -51,7 +51,13 @@ def _to_campaign(o: dict) -> Optional[Campaign]:
 
     sort = o.get("sort")
     cat = ((o.get("category") or {}).get("title") or "").strip()
-    category = "배송" if sort == "DELIVERY" else cat
+    # paybackPlatform 이 있으면 구매 후 환급 = 페이백(제목엔 안 드러남).
+    if o.get("paybackPlatform"):
+        category = "페이백"
+    elif sort == "DELIVERY":
+        category = "배송"
+    else:
+        category = cat
 
     applicants = o.get("applicantCount")
     recruit = o.get("infNum")
