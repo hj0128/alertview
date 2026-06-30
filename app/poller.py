@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import List
 
 import httpx
@@ -23,6 +24,16 @@ async def collect_new(demo: bool) -> List[Campaign]:
     new_items: List[Campaign] = []
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         for ad in active_adapters(demo):
+            # 별도 수집주기가 설정된 어댑터(min_interval)는 주기가 안 됐으면 건너뜀(기존 데이터 유지).
+            iv = getattr(ad, "min_interval", 0)
+            if iv > 0:
+                last = db.meta_get(f"last_poll:{ad.key}")
+                if last:
+                    try:
+                        if time.time() - float(last) < iv:
+                            continue
+                    except ValueError:
+                        pass
             deep = not db.backfill_done(ad.key)   # 백필 미완료면 전체 크롤(알림 억제)
             stats = {"fresh": 0}
             seen_cids = set()                      # 이번 수집에서 본 cid(자동 정리용)
@@ -50,6 +61,8 @@ async def collect_new(demo: bool) -> List[Campaign]:
                 continue
             if deep and not getattr(ad, "partial", False):
                 db.set_backfill_done(ad.key)       # 전체 크롤 정상 완료 → 이후 증분 모드
+            if iv > 0:
+                db.meta_set(f"last_poll:{ad.key}", str(time.time()))   # 주기 어댑터: 마지막 수집시각 기록
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
                      " (전체 백필: 알림생략)" if deep else "")
             _prune_unseen(ad, seen_cids)           # 소스에서 내려간 활성 캠페인 자동 삭제

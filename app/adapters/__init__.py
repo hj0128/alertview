@@ -15,6 +15,7 @@ from .ringble import RingbleAdapter
 from .demo import DemoAdapter
 from .revu import RevuAdapter
 from .gaboja import GabojaAdapter
+from .chvu import ChvuAdapter
 
 ALL_ADAPTERS = [
     DinnerQueenAdapter(),
@@ -28,6 +29,7 @@ ALL_ADAPTERS = [
     RingbleAdapter(),
     RevuAdapter(),
     GabojaAdapter(),
+    ChvuAdapter(),
 ]
 
 

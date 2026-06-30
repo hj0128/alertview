@@ -52,6 +52,10 @@ REVU_USERNAME = os.getenv("REVU_USERNAME", "").strip()
 REVU_PASSWORD = os.getenv("REVU_PASSWORD", "").strip()
 REVU_MAX_PAGES = int(os.getenv("REVU_MAX_PAGES", "0"))  # 0 = total 만큼 끝까지
 
+# 체험뷰(chvu.co.kr): /v2/campaigns JSON API. 캠페인이 매우 많아 매 5분 수집은 과해서
+# 별도 주기(기본 30분)로만 수집. 0 이면 매 폴링.
+CHVU_MIN_INTERVAL = int(os.getenv("CHVU_MIN_INTERVAL", "1800"))
+
 # 지역 정규화: 내장 사전으로 못 잡는 역/랜드마크(예: 신용산역)를 카카오 로컬 API로 보정.
 # 비우면 내장 사전만 사용(미해결은 시/도까지만 또는 미표시). 무료 키: developers.kakao.com
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
