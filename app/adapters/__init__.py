@@ -16,6 +16,11 @@ from .demo import DemoAdapter
 from .revu import RevuAdapter
 from .gaboja import GabojaAdapter
 from .chvu import ChvuAdapter
+from .cloudreview import CloudreviewAdapter
+from .fourblog import FourblogAdapter
+from .tble import TbleAdapter
+from .odiya import OdiyaAdapter
+from .popomon import PopomonAdapter
 
 ALL_ADAPTERS = [
     DinnerQueenAdapter(),
@@ -30,6 +35,11 @@ ALL_ADAPTERS = [
     RevuAdapter(),
     GabojaAdapter(),
     ChvuAdapter(),
+    CloudreviewAdapter(),
+    FourblogAdapter(),
+    TbleAdapter(),
+    OdiyaAdapter(),
+    PopomonAdapter(),
 ]
 
 
