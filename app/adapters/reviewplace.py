@@ -35,7 +35,7 @@ SUBCATS = [
     ("cmp_local", "지역", "생활/편의", "기타"),
     ("cmp_local", "지역", "시크릿쇼퍼", "기타"),
     ("cmp_local", "지역", "기타", "기타"),
-    ("cmp_delivery", "제품", "뷰티", "뷰티"),
+    ("cmp_delivery", "제품", "뷰티", "배송"),
     ("cmp_delivery", "제품", "식품", "배송"),
     ("cmp_delivery", "제품", "생활", "배송"),
     ("cmp_delivery", "제품", "유아동", "배송"),
