@@ -18,7 +18,27 @@ from .. import config
 from .base import BaseAdapter, Campaign, UA
 
 BASE = "https://www.seoulouba.co.kr"
-LIST = BASE + "/campaign/?qq=newopen&page={page}"
+# 소스 카테고리(cat) 필터. /campaign/?cat=<코드>&page=N (약 192건/페이지).
+LIST = BASE + "/campaign/?cat={cat}&page={page}"
+# (cat 코드, 우리 카테고리). 우선순위 순서 - 앞 cat 에서 잡힌 cid 는 뒤에서 건너뜀(중복제거).
+# 방문형 채널 하위(인스타/스레드/클립)는 주제 하위와 겹치므로 뒤에 둬서 '주제'가 이기게 하고,
+# 주제 없이 채널로만 분류된 방문형은 기타로. 배송형/기자단은 상위 cat 하나로 전체 커버.
+CATS = [
+    ("448", "기자단"),   # 기자단
+    ("383", "배송"),     # 배송형 전체(식품·뷰티·디지털·패션·생활·유아동·도서·펫·기타…)
+    ("378", "맛집"),     # 방문형 맛집
+    ("379", "여가"),     # 방문형 여행/숙박
+    ("510", "여가"),     # 방문형 스포츠/레저
+    ("381", "여가"),     # 방문형 문화/생활
+    ("380", "뷰티"),     # 방문형 뷰티/패션
+    ("382", "포장"),     # 방문형 테이크아웃
+    ("446", "기타"),     # 방문형 기타
+    ("449", "배송"),     # 구매평
+    ("505", "기타"),     # 방문형 인스타(주제 없는 채널 캠페인)
+    ("520", "기타"),     # 방문형 스레드
+    ("523", "기타"),     # 방문형 클립
+    ("450", "기타"),     # 서비스
+]
 _ID_RE = re.compile(r"c=(\d+)")
 _DAY_RE = re.compile(r"D-(\d+)")
 _APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*/\s*모집\s*([\d,]+)")
@@ -53,7 +73,7 @@ def _region_cand(title: str) -> str:
     return " ".join(parts).strip()
 
 
-def _parse(html: str) -> List[Campaign]:
+def _parse(html: str, category: str = "") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out = []
     for li in soup.select("li.campaign_content"):
@@ -72,6 +92,10 @@ def _parse(html: str) -> List[Campaign]:
             continue
 
         dday_txt = (li.select_one(".d_day").get_text(" ", strip=True) if li.select_one(".d_day") else "")
+        # cat 페이지는 최신순이라 앞쪽=활성, 뒤쪽=마감 아카이브(수년치). 마감된 건 수집 제외.
+        # (fetch 는 활성 0건 페이지에서 그 cat 중단 → 아카이브 크롤 방지)
+        if re.search(r"마감|종료", dday_txt) and "오늘" not in dday_txt:
+            continue
         if (dm := _DAY_RE.search(dday_txt)):
             dday = _to_int(dm.group(1))
         elif re.search(r"D-?day|오늘|마감", dday_txt, re.I):
@@ -96,7 +120,7 @@ def _parse(html: str) -> List[Campaign]:
         out.append(Campaign(
             site="seoulouba", site_name="서울오빠", cid=cid, title=title,
             url=f"{BASE}/campaign/?c={cid}",
-            region=_region_cand(title), category="", channel=_channel(li),
+            region=_region_cand(title), category=category, channel=_channel(li),
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
         ))
@@ -107,31 +131,36 @@ class SeouloubaAdapter(BaseAdapter):
     key = "seoulouba"
     name = "서울오빠"
     enabled = True
+    prunable = True          # cat 전체(방문형/배송형/기자단/구매평/서비스)를 완주 → 소스에서 내려간 건 자동 삭제
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         out, seen = [], set()
         cap = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500
         headers = {"User-Agent": UA, "Referer": BASE + "/"}
         log.info("[seoulouba] 수집 시작...")
-        for page in range(1, cap + 1):
-            try:
-                html = await self.get(client, LIST.format(page=page), headers=headers)
-            except Exception as e:
-                log.warning("[seoulouba] %d페이지 요청 실패(중단): %s", page, e)
-                raise
-            cards = _parse(html)
-            if not cards:
-                break
-            page_new = [c for c in cards if c.cid not in seen]
-            for c in page_new:
-                seen.add(c.cid)
-            out.extend(page_new)
-            keep = True
-            if on_page and page_new:
-                keep = on_page(page_new)
-            log.info("[seoulouba] %d페이지 +%d건 (누적 %d건)", page, len(page_new), len(out))
-            if keep is False:
-                break
-            await asyncio.sleep(0.3)
+        for cat, our in CATS:
+            n0 = len(out)
+            cat_seen: set = set()            # 이 cat 안에서 본 cid(끝/루프 판정용; 전역 dedup 과 분리)
+            for page in range(1, cap + 1):
+                try:
+                    html = await self.get(client, LIST.format(cat=cat, page=page), headers=headers)
+                except Exception as e:
+                    log.warning("[seoulouba] cat=%s p%d 요청 실패(중단): %s", cat, page, e)
+                    break
+                cards = _parse(html, our)
+                if not cards:
+                    break
+                cids = {c.cid for c in cards}
+                if cids <= cat_seen:         # 이 cat 에서 새 cid 없음 = 끝(또는 페이징 루프)
+                    break
+                cat_seen |= cids
+                page_new = [c for c in cards if c.cid not in seen]   # 전역 중복제거(우선순위 앞 cat 이 이김)
+                for c in page_new:
+                    seen.add(c.cid)
+                out.extend(page_new)
+                if on_page and page_new:
+                    on_page(page_new)
+                await asyncio.sleep(0.3)
+            log.info("[seoulouba] cat=%s(%s) +%d건 (누적 %d건)", cat, our, len(out) - n0, len(out))
         log.info("[seoulouba] 수집 완료 (총 %d건)", len(out))
         return out
