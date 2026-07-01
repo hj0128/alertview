@@ -22,7 +22,20 @@ from .base import BaseAdapter, Campaign, UA
 
 BASE = "https://xn--o39a04kpnjo4k9hgflp.com"
 LIST = BASE + "/main/ajax/_ajax.cmpSubList.php"
-CATS = ["11", "10", "14"]          # 지역 / 제품 / 기자단
+# (ct1, ct2, 우리 카테고리). 우선순위 순 중복제거. 지역(11)은 ct2 주제별, 제품(10)은 전부 배송,
+# 기자단(14)은 전부 기자단. 지역 ct2='' 는 세부 없는 leftover 캐치올(기타). 배달→맛집, 포장→포장.
+CATS = [
+    ("11", "1110", "맛집"),   # 지역 맛집
+    ("11", "1111", "뷰티"),   # 지역 뷰티(방문 뷰티샵)
+    ("11", "1112", "여가"),   # 지역 숙박
+    ("11", "1119", "여가"),   # 지역 문화
+    ("11", "1120", "맛집"),   # 지역 배달(배달음식)
+    ("11", "1122", "포장"),   # 지역 포장(테이크아웃)
+    ("11", "1131", "기타"),   # 지역 기타
+    ("11", "",     "기타"),   # 지역 leftover(세부 미지정) → 기타
+    ("10", "",     "배송"),   # 제품 전체(뷰티·패션·식품·생활·기타) → 배송
+    ("14", "",     "기자단"), # 기자단 전체 → 기자단
+]
 PER_PAGE = 50
 MAX_PAGES = 60                     # 카테고리당 안전 상한(빈 응답이면 그 전에 종료)
 _ID_RE = re.compile(r"[?&]id=(\d+)")
@@ -41,7 +54,7 @@ def _to_int(s) -> Optional[int]:
         return None
 
 
-def _parse(html: str) -> List[Campaign]:
+def _parse(html: str, category: str = "") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out = []
     for a in soup.select("a[href*='?id=']"):
@@ -76,10 +89,6 @@ def _parse(html: str) -> List[Campaign]:
                 if cls in _CH:
                     ch = _CH[cls]
                     break
-        # 유형(방문형/배송형/기자단형) = 카테고리 분류 힌트
-        type_span = a.select_one(".cate span")
-        ctype = type_span.get_text(strip=True) if type_span else ""
-
         img = a.select_one("img")
         image = ""
         if img:
@@ -88,7 +97,7 @@ def _parse(html: str) -> List[Campaign]:
 
         out.append(Campaign(
             site="gaboja", site_name="가보자체험단", cid=cid, title=title,
-            url=f"{BASE}/cmp/?id={cid}", region="", category=ctype, channel=ch,
+            url=f"{BASE}/cmp/?id={cid}", region="", category=category, channel=ch,
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image,
         ))
@@ -106,18 +115,19 @@ class GabojaAdapter(BaseAdapter):
         headers = {"User-Agent": UA, "Referer": BASE + "/cmp/",
                    "X-Requested-With": "XMLHttpRequest"}
         log.info("[gaboja] 수집 시작...")
-        for ct1 in CATS:
+        for ct1, ct2, our in CATS:
+            n0 = len(out)
             for page in range(0, MAX_PAGES):
-                data = {"ct1": ct1, "ct2": "", "channel": "", "sst": "", "stx": "",
+                data = {"ct1": ct1, "ct2": ct2, "channel": "", "sst": "", "stx": "",
                         "page": page, "list": PER_PAGE, "lc": "", "st": "", "sf": "", "empty": "0"}
                 try:
                     r = await client.post(LIST, data=data, headers=headers, timeout=20.0)
                 except Exception as e:
-                    log.warning("[gaboja] ct1=%s page %d 실패: %s", ct1, page, e)
+                    log.warning("[gaboja] ct1=%s ct2=%s page %d 실패: %s", ct1, ct2, page, e)
                     break
                 if r.status_code != 200 or not r.text.strip():
                     break
-                page_cs = [c for c in _parse(r.text) if c.cid not in seen]
+                page_cs = [c for c in _parse(r.text, our) if c.cid not in seen]
                 if not page_cs:
                     break
                 for c in page_cs:
@@ -126,6 +136,6 @@ class GabojaAdapter(BaseAdapter):
                 if on_page:
                     on_page(page_cs)
                 await asyncio.sleep(0.3)
-            log.info("[gaboja] ct1=%s 누적 %d건", ct1, len(out))
+            log.info("[gaboja] ct1=%s ct2=%s(%s) +%d건 (누적 %d건)", ct1, ct2, our, len(out) - n0, len(out))
         log.info("[gaboja] 수집 완료 (총 %d건)", len(out))
         return out
