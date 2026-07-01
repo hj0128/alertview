@@ -178,6 +178,9 @@ async def run_poll(bot, demo: bool) -> None:
         purged = db.purge_expired(config.PURGE_GRACE_DAYS)
         if purged:
             log.info("마감 %d일 지난 캠페인 %d건 삭제", config.PURGE_GRACE_DAYS, purged)
+    dropped = db.prune_visits(90)          # 방문 로그 90일 보관 후 자동삭제(개인정보)
+    if dropped:
+        log.info("방문 로그 90일 지난 %d건 삭제", dropped)
     await _check_mrblog_cookie(bot, demo)
     await _kakao_backfill()
     if new_items:

@@ -505,6 +505,15 @@ def visit_stats(days: int = 14) -> dict:
             "referrers": [dict(r) for r in refs], "paths": [dict(r) for r in paths]}
 
 
+def prune_visits(days: int = 90) -> int:
+    """days 일 지난 방문 로그 삭제(개인정보 보관기간 제한). 삭제 건수 반환."""
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    with _lock:
+        cur = _c().execute(_q("DELETE FROM visits WHERE ts < ?"), (cutoff,))
+        _c().commit()
+        return cur.rowcount or 0
+
+
 def backfill_done(site: str) -> bool:
     """해당 사이트의 '첫 전체 수집(백필)'이 끝까지 정상 완료됐는지 여부.
     완료 전(또는 중간에 끊김)에는 매 수집을 전체 크롤로 돌려 구멍을 메운다."""
