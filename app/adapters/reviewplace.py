@@ -24,7 +24,7 @@ BASE = "https://www.reviewplace.co.kr"
 AJAX = f"{BASE}/theme/rp/_ajax_cmp_list_tpl.php"
 # (목록 유형, 기본 카테고리)
 TYPES = [("cmp_local", ""), ("cmp_delivery", "배송"),
-         ("cmp_doc", "기자단"), ("cmp_gm", "")]
+         ("cmp_doc", "기자단"), ("cmp_gm", "배송")]   # 구매평=구매 후 리뷰(제품) → 배송
 PAGE = 30                      # 1회 요청 개수(startnum 증가 단위)
 _ID_RE = re.compile(r"id=(\d+)")
 _DDAY_RE = re.compile(r"D\s*-\s*(\d+)")

@@ -90,10 +90,13 @@ def _parse(html: str, category: str) -> List[Campaign]:
             else:
                 image = s
 
+        # tble 유형(d/p/c→배송)은 방문 서비스(피부과 등)까지 배송으로 오분류 →
+        # 제목 내용으로 먼저 분류하고, 못 잡으면 유형(기자단/배송)으로 폴백.
+        from ..matcher import classify_with_fallback
         out.append(Campaign(
             site="tble", site_name="티블", cid=cid, title=title,
             url=f"{BASE}/view.php?cp_id={cid}",
-            region=guess_region(title), category=category, channel=ch,
+            region=guess_region(title), category=classify_with_fallback(title, category), channel=ch,
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
         ))

@@ -499,14 +499,14 @@ def record_campaign(c) -> None:
     # 카테고리 결정 순서: ① 내용(제목·해시태그 등) 키워드 분류 → ② 안 되면 어댑터가 준 소스 카테고리/유형
     # (배송·기자단 등) 폴백 → ③ 그것도 없으면 '기타'. 유형이 내용을 덮어쓰지 않게 내용을 우선한다
     # (예: '피부과'는 사이트 유형이 배송형이어도 뷰티). 억지로 맛집 등으로 추측하지 않음.
+    # 소스가 준 표준 카테고리('기타' 제외)는 신뢰(어댑터가 소스 분류를 매핑해 넘김).
+    # 없으면 제목·해시태그로 분류, 그래도 모르면 '기타'(억지 추측 없음).
+    # (엉성한 유형만 주는 사이트는 어댑터가 classify_with_fallback 로 내용 우선 처리해 넘긴다)
     from .matcher import classify, CANONICAL
-    classified = classify(" ".join([c.title or "", c.channel or "", getattr(c, "extra", "") or ""]))
-    if classified != "기타":
-        category = classified
-    elif (c.category or "") in CANONICAL and c.category != "기타":
+    if (c.category or "") in CANONICAL and c.category != "기타":
         category = c.category
     else:
-        category = "기타"
+        category = classify(" ".join([c.title or "", c.channel or "", getattr(c, "extra", "") or ""]))
     with _lock:
         _c().execute(_q(
             "INSERT INTO seen(site, cid, title, url, region, region_raw, category, channel, "
