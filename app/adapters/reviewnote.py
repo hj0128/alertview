@@ -51,15 +51,23 @@ def _to_campaign(o: dict) -> Optional[Campaign]:
 
     sort = o.get("sort")
     cat = ((o.get("category") or {}).get("title") or "").strip()
-    # paybackPlatform 이 있으면 구매 후 환급 = 페이백(제목엔 안 드러남).
-    if o.get("paybackPlatform"):
+    # 소스는 2축(유형 sort × 주제 category). 유형이 우리 8종의 '유형 칸'을 정하면 그것을 우선,
+    # 아니면(방문형/당일지급) 주제로 매핑한다.
+    #   sort: VISIT=방문형 TAKEOUT=구매형 DELIVERY=배송형 REPORTER=기자단
+    #         PLATFORM_REPORTER=플랫폼기자단 TODAY=당일지급 ETC=포장 PAYBACK=페이백
+    # 방문형/당일지급의 주제 매핑(배송 아님): 식품=음식관련→맛집, 반려동물=애견카페/체험→여가, 디지털=칸없음→기타
+    _TOPIC = {"맛집": "맛집", "뷰티": "뷰티", "여행": "여가",
+              "식품": "맛집", "반려동물": "여가", "디지털": "기타", "기타": "기타"}
+    if sort == "PAYBACK" or o.get("paybackPlatform"):
         category = "페이백"
-    elif sort in ("DELIVERY", "TAKEOUT"):   # DELIVERY=배송형, TAKEOUT=구매형(재택 제품 구매)
-        category = "배송"
-    elif sort == "REPORTER":
+    elif sort in ("REPORTER", "PLATFORM_REPORTER"):
         category = "기자단"
-    else:
-        category = cat
+    elif sort == "ETC":                      # ETC = 포장(소스 라벨)
+        category = "포장"
+    elif sort in ("DELIVERY", "TAKEOUT"):    # 배송형 / 구매형(제품 구매)
+        category = "배송"
+    else:                                    # VISIT(방문형) / TODAY(당일지급) → 주제로
+        category = _TOPIC.get(cat, "기타")
 
     applicants = o.get("applicantCount")
     recruit = o.get("infNum")
