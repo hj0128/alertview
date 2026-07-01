@@ -31,9 +31,13 @@ log = logging.getLogger(__name__)
 # CS_type(플랫폼) → 우리 채널. 부분일치(접두/포함)로 판정.
 _CH_RULES = [("REELS", "릴스"), ("SHORTS", "숏츠"), ("CLIP", "클립"),
              ("YOUTUBE", "유튜브"), ("INSTAGRAM", "인스타"), ("BLOG", "블로그")]
-# CT_type(콘텐츠 분류) → 표준 카테고리(방문형일 때만 사용)
+# CT_type(콘텐츠 분류=소스 주제) → 표준 카테고리(방문형일 때만 사용). 방문형 구조:
+# 숙소(ROOMS)→여가, 맛집/카페(RESTAURANT·CAFE·FOOD)→맛집, 여가(LEISURE)→여가,
+# 뷰티/패션(BEAUTY·FASHION)→뷰티, 생활/기타(LIFE·ETC)→기타.
 _CT_CAT = {"RESTAURANT": "맛집", "CAFE": "맛집", "FOOD": "맛집",
-           "ROOMS": "여가", "LEISURE": "여가", "BEAUTY": "뷰티"}
+           "ROOMS": "여가", "LEISURE": "여가",
+           "BEAUTY": "뷰티", "FASHION": "뷰티",
+           "LIFE": "기타", "ETC": "기타"}
 
 
 def _to_int(v) -> Optional[int]:
@@ -57,7 +61,7 @@ def _category(recruit_type: str, ct_type: str) -> str:
         return "기자단"
     if rt in ("shipping", "buyreview"):
         return "배송"
-    return _CT_CAT.get((ct_type or "").upper(), "")   # visiting: CT_type 으로, 미상은 제목분류
+    return _CT_CAT.get((ct_type or "").upper(), "기타")   # visiting: CT_type(소스 주제)으로, 미상은 기타
 
 
 def _dday(x: dict) -> Optional[int]:
