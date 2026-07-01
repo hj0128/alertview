@@ -75,10 +75,13 @@ def _parse_page(html: str, category: str = "") -> List[Campaign]:
         node = _card_node(a)
         blob = node.get_text(" ", strip=True) if node else title
         image = _pick_img(node) or _pick_img(a)
+        # 디너의여왕 D-day 는 실제보다 1 적게 표기 → +1 보정('오늘마감'→D-1, 'D-1'→D-2 …)
         if (mm := _DDAY_RE.search(blob)):
             dday = _to_int(mm.group(1))
-        elif "D'day" in blob or "D-day" in blob or "Dday" in blob:
-            dday = 0          # 오늘 마감
+            if dday is not None:
+                dday += 1
+        elif "D'day" in blob or "D-day" in blob or "Dday" in blob or "오늘마감" in blob:
+            dday = 1          # 오늘 마감 → D-1
         else:
             dday = None
         applicants = recruit = competition = None
