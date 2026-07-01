@@ -29,6 +29,8 @@ PROFILE = os.path.join(ROOT, "tools", ".mrblog_profile")   # 네이버 세션 �
 
 
 def _write_env(cookie: str) -> None:
+    # 쿠키의 '$' 는 docker compose 가 변수로 해석해 값이 잘림 → '$$' 로 이스케이프(리터럴 $ 전달).
+    cookie = cookie.replace("$", "$$")
     lines = open(ENV_PATH, encoding="utf-8").read().splitlines() if os.path.exists(ENV_PATH) else []
     out, found = [], False
     for ln in lines:
