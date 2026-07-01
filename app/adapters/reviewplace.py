@@ -23,8 +23,32 @@ from .base import (BaseAdapter, Campaign, guess_in, CATEGORIES, CHANNELS,
 BASE = "https://www.reviewplace.co.kr"
 AJAX = f"{BASE}/theme/rp/_ajax_cmp_list_tpl.php"
 # (목록 유형, 기본 카테고리)
-TYPES = [("cmp_local", ""), ("cmp_delivery", "배송"),
-         ("cmp_doc", "기자단"), ("cmp_gm", "배송")]   # 구매평=구매 후 리뷰(제품) → 배송
+# 소스 세부 카테고리(ct1/ct2)를 그대로 가져와 우리 8종으로 매핑. (type, ct1, ct2, 우리카테고리)
+# ct2=None 이면 그 그룹 전체(세부 불필요). 프리미엄/N인플루언서는 현재 사이트에서 비활성이라 제외.
+SUBCATS = [
+    ("cmp_local", "지역", "맛집", "맛집"),
+    ("cmp_local", "지역", "카페/베이커리", "맛집"),
+    ("cmp_local", "지역", "뷰티/건강", "뷰티"),
+    ("cmp_local", "지역", "운동/스포츠", "여가"),
+    ("cmp_local", "지역", "숙박", "여가"),
+    ("cmp_local", "지역", "문화/체험", "여가"),
+    ("cmp_local", "지역", "생활/편의", "기타"),
+    ("cmp_local", "지역", "시크릿쇼퍼", "기타"),
+    ("cmp_local", "지역", "기타", "기타"),
+    ("cmp_delivery", "제품", "뷰티", "뷰티"),
+    ("cmp_delivery", "제품", "식품", "배송"),
+    ("cmp_delivery", "제품", "생활", "배송"),
+    ("cmp_delivery", "제품", "유아동", "배송"),
+    ("cmp_delivery", "제품", "운동/건강", "배송"),
+    ("cmp_delivery", "제품", "디지털", "배송"),
+    ("cmp_delivery", "제품", "패션/잡화", "배송"),
+    ("cmp_delivery", "제품", "반려동물", "배송"),
+    ("cmp_delivery", "제품", "도서/교육", "배송"),
+    ("cmp_delivery", "제품", "서비스", "기타"),
+    ("cmp_delivery", "제품", "기타", "배송"),
+    ("cmp_doc", None, None, "기자단"),
+    ("cmp_gm", None, None, "배송"),
+]
 PAGE = 30                      # 1회 요청 개수(startnum 증가 단위)
 _ID_RE = re.compile(r"id=(\d+)")
 _DDAY_RE = re.compile(r"D\s*-\s*(\d+)")
@@ -108,7 +132,7 @@ def _parse(html: str, default_cat: str) -> List[Campaign]:
             site="reviewplace", site_name="리뷰플레이스", cid=cid, title=title,
             url=f"{BASE}/pr/?id={cid}",
             region=_region(title),
-            category=guess_in(title, CATEGORIES) or default_cat,
+            category=default_cat,
             channel=guess_in(title, CHANNELS) or "블로그",
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=_pick_img(it), extra=(f"D-{dday}" if dday is not None else ""),
@@ -117,6 +141,7 @@ def _parse(html: str, default_cat: str) -> List[Campaign]:
 
 
 class ReviewPlaceAdapter(BaseAdapter):
+    prunable = True
     key = "reviewplace"
     name = "리뷰플레이스"
     enabled = True
@@ -136,10 +161,14 @@ class ReviewPlaceAdapter(BaseAdapter):
         except Exception as e:
             log.warning("[reviewplace] 초기 GET 실패(무시): %s", e)
 
-        for typ, defcat in TYPES:
+        for typ, ct1, ct2, cat in SUBCATS:
             start = 0
             for _ in range(cap):
                 body = {"device": "pc", "type": typ, "startnum": start, "endnum": PAGE}
+                if ct1:
+                    body["ct1"] = ct1
+                if ct2:
+                    body["ct2"] = ct2
                 try:
                     resp = await client.post(AJAX, data=body, headers=headers, timeout=20.0)
                     resp.raise_for_status()
@@ -147,14 +176,14 @@ class ReviewPlaceAdapter(BaseAdapter):
                 except Exception as e:
                     log.warning("[reviewplace] %s start=%d 요청 실패(중단): %s", typ, start, e)
                     raise
-                page_new = [c for c in _parse(html, defcat) if c.cid not in seen]
+                page_new = [c for c in _parse(html, cat) if c.cid not in seen]
                 for c in page_new:
                     seen.add(c.cid)
                 out.extend(page_new)
                 keep = True
                 if on_page and page_new:
                     keep = on_page(page_new)
-                log.info("[reviewplace] %s start=%d +%d건 (누적 %d건)", typ, start, len(page_new), len(out))
+                log.info("[reviewplace] %s/%s start=%d +%d (누적 %d)", ct1 or typ, ct2 or "-", start, len(page_new), len(out))
                 if not page_new:
                     break
                 if keep is False:
