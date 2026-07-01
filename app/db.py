@@ -151,6 +151,12 @@ def _create_schema() -> None:
             key TEXT PRIMARY KEY, value TEXT
         )
         """,
+        f"""
+        CREATE TABLE IF NOT EXISTS visits (
+            {"id BIGSERIAL PRIMARY KEY" if _is_pg() else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
+            ts TEXT, ip TEXT, path TEXT, referrer TEXT, ua TEXT, uid {int_pk}
+        )
+        """,
     ]
     for s in stmts:
         _conn.execute(s)
@@ -461,6 +467,42 @@ def meta_set(key: str, value: str) -> None:
             "INSERT INTO meta(key, value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value"), (key, value))
         _c().commit()
+
+
+def log_visit(ip: str, path: str, referrer: str = "", ua: str = "", uid=None) -> None:
+    """웹 방문 1건 기록(베스트에포트 - 실패해도 요청엔 영향 없음)."""
+    try:
+        with _lock:
+            _c().execute(_q("INSERT INTO visits(ts,ip,path,referrer,ua,uid) VALUES(?,?,?,?,?,?)"),
+                         (_now(), (ip or "")[:64], (path or "")[:200],
+                          (referrer or "")[:300], (ua or "")[:400], uid))
+            _c().commit()
+    except Exception:
+        pass
+
+
+def visit_stats(days: int = 14) -> dict:
+    """최근 days 일 방문 통계: 일별/전체/오늘/유입경로/페이지."""
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    today = datetime.date.today().isoformat()
+    with _lock:
+        c = _c()
+        daily = c.execute(_q(
+            "SELECT substr(ts,1,10) AS d, count(*) AS v, count(DISTINCT ip) AS u "
+            "FROM visits WHERE ts>=? GROUP BY substr(ts,1,10) ORDER BY d DESC"), (cutoff,)).fetchall()
+        tot = c.execute(_q("SELECT count(*) AS v, count(DISTINCT ip) AS u FROM visits WHERE ts>=?"),
+                        (cutoff,)).fetchone()
+        tod = c.execute(_q("SELECT count(*) AS v, count(DISTINCT ip) AS u FROM visits WHERE ts>=?"),
+                        (today,)).fetchone()
+        refs = c.execute(_q(
+            "SELECT CASE WHEN referrer IS NULL OR referrer='' THEN '(직접/앱)' ELSE referrer END AS r, "
+            "count(*) AS n FROM visits WHERE ts>=? GROUP BY r ORDER BY n DESC LIMIT 12"), (cutoff,)).fetchall()
+        paths = c.execute(_q(
+            "SELECT path, count(*) AS n FROM visits WHERE ts>=? GROUP BY path ORDER BY n DESC LIMIT 12"),
+            (cutoff,)).fetchall()
+    return {"days": days, "daily": [dict(r) for r in daily],
+            "total": dict(tot), "today": dict(tod),
+            "referrers": [dict(r) for r in refs], "paths": [dict(r) for r in paths]}
 
 
 def backfill_done(site: str) -> bool:

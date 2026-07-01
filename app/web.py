@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import time
+from html import escape as _esc
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -32,6 +33,59 @@ NUMERIC_FILTERS = ("min_competition", "max_competition", "min_dday", "max_dday",
 
 app = FastAPI(title="체험단 알림 설정")
 app.add_middleware(SessionMiddleware, secret_key=config.WEB_SECRET, max_age=60 * 60 * 24 * 30)
+
+
+@app.middleware("http")
+async def _visit_logger(request: Request, call_next):
+    """페이지(HTML) 방문을 서버에 기록. API/정적/인증콜백은 제외. 베스트에포트."""
+    response = await call_next(request)
+    try:
+        p = request.url.path
+        if (request.method == "GET" and response.status_code < 400
+                and not p.startswith(("/api", "/static", "/auth", "/dev-login", "/logout"))
+                and p not in ("/favicon.ico", "/robots.txt")):
+            xff = request.headers.get("x-forwarded-for", "")
+            ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "")
+            try:
+                uid = request.session.get("uid")
+            except Exception:
+                uid = None
+            db.log_visit(ip, p, request.headers.get("referer", ""),
+                         request.headers.get("user-agent", ""), uid)
+    except Exception:
+        pass
+    return response
+
+
+@app.get("/admin/stats", response_class=HTMLResponse)
+async def admin_stats(request: Request):
+    """관리자 전용 방문 통계 (세션 uid == ADMIN_CHAT_ID)."""
+    uid = request.session.get("uid")
+    if not config.ADMIN_CHAT_ID or str(uid) != str(config.ADMIN_CHAT_ID):
+        return HTMLResponse("<h3>권한 없음</h3><p>관리자 계정으로 로그인 후 접근하세요.</p>", status_code=403)
+    s = db.visit_stats(14)
+    daily = "".join(f"<tr><td>{d['d']}</td><td>{d['v']}</td><td>{d['u']}</td></tr>" for d in s["daily"]) or "<tr><td colspan=3>기록 없음</td></tr>"
+    refs = "".join(f"<tr><td>{_esc(str(r['r']))[:80]}</td><td>{r['n']}</td></tr>" for r in s["referrers"]) or "<tr><td colspan=2>-</td></tr>"
+    paths = "".join(f"<tr><td>{_esc(str(p['path']))[:80]}</td><td>{p['n']}</td></tr>" for p in s["paths"]) or "<tr><td colspan=2>-</td></tr>"
+    t, tot = s["today"], s["total"]
+    html_out = f"""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>방문 통계</title>
+<style>body{{font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f5f6f8;margin:0;padding:20px;color:#1f2533}}
+h2{{margin:18px 0 8px}} .cards{{display:flex;gap:12px;flex-wrap:wrap}}
+.card{{background:#fff;border-radius:12px;padding:16px 20px;box-shadow:0 1px 6px rgba(0,0,0,.06)}}
+.big{{font-size:28px;font-weight:700;color:#3b6ef6}} .lbl{{color:#888;font-size:13px}}
+table{{border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.06);min-width:280px}}
+th,td{{padding:8px 14px;text-align:left;border-bottom:1px solid #eef}} th{{background:#f0f3fa}}</style></head><body>
+<h1>📊 방문 통계 <span style="font-size:14px;color:#888">(최근 {s['days']}일)</span></h1>
+<div class=cards>
+ <div class=card><div class=lbl>오늘 방문</div><div class=big>{t['v']}</div><div class=lbl>순 방문자 {t['u']}</div></div>
+ <div class=card><div class=lbl>{s['days']}일 방문</div><div class=big>{tot['v']}</div><div class=lbl>순 방문자 {tot['u']}</div></div>
+</div>
+<h2>일별</h2><table><tr><th>날짜</th><th>방문</th><th>순방문(IP)</th></tr>{daily}</table>
+<h2>유입 경로</h2><table><tr><th>referrer</th><th>수</th></tr>{refs}</table>
+<h2>페이지</h2><table><tr><th>경로</th><th>수</th></tr>{paths}</table>
+</body></html>"""
+    return HTMLResponse(html_out, headers={"Cache-Control": "no-store"})
 
 
 def verify_telegram_auth(data: dict) -> bool:
