@@ -34,6 +34,28 @@ _MEDIA = {
     "reels": "릴스", "shorts": "숏츠", "tiktok": "틱톡",
 }
 
+# revu category 배열 = [세부주제, 유형(방문형/배송형/기자단형/…)]. 소스 유형+주제를 우리 8종에 직접 매핑.
+# 방문형 주제 → 우리 카테고리 (없는 주제는 기타).
+_VISIT_TOPIC = {
+    "맛집": "맛집", "배달": "맛집", "테이크아웃": "포장",
+    "뷰티샵": "뷰티",
+    "문화": "여가", "숙박": "여가",
+    "지역_기타": "기타",
+}
+
+
+def _map_category(cat) -> str:
+    """category 배열에서 유형(…형)+주제를 읽어 우리 8종으로. 배송형=제품→배송(서비스만 기타),
+    기자단형→기자단, 방문형/기타형→주제로."""
+    toks = [str(x) for x in cat] if isinstance(cat, list) else ([str(cat)] if cat else [])
+    typ = next((t for t in toks if t.endswith("형")), "")
+    topic = toks[0] if toks else ""
+    if typ == "기자단형":
+        return "기자단"
+    if typ == "배송형":                       # 제품 = 택배 상품 → 배송 (웹서비스·모바일앱만 기타)
+        return "기타" if topic in ("웹서비스", "모바일앱") else "배송"
+    return _VISIT_TOPIC.get(topic, "기타")     # 방문형/무유형/인플루언서형 → 주제로
+
 
 def _to_int(v) -> Optional[int]:
     try:
@@ -62,15 +84,11 @@ def _to_campaign(it: dict) -> Optional[Campaign]:
     recruit = _to_int(it.get("reviewerLimit"))
     applicants = _to_int((it.get("campaignStats") or {}).get("requestCount"))
     competition = round(applicants / recruit, 1) if recruit and applicants is not None else None
-    # 레뷰 category 배열의 첫 값이 내용 카테고리(맛집/뷰티샵/카페/숙박…). 우리 표준으로 매핑해 폴백 제공.
-    from ..matcher import classify          # 지연 import(순환 참조 방지)
-    cat = it.get("category") or []
-    cat_text = " ".join(map(str, cat)) if isinstance(cat, list) else str(cat or "")
     return Campaign(
         site="revu", site_name="레뷰", cid=str(cid), title=title,
         url=f"{WWW}/campaign/{cid}",
         region=_region_of(it),
-        category=classify(cat_text),
+        category=_map_category(it.get("category")),
         channel=_MEDIA.get((it.get("media") or "").lower(), ""),
         dday=_to_int(it.get("byDeadline")),
         applicants=applicants, recruit=recruit, competition=competition,
