@@ -18,11 +18,19 @@ from bs4 import BeautifulSoup
 from .base import BaseAdapter, Campaign, guess_region, UA
 
 BASE = "https://www.cloudreview.co.kr"
-PAGES = ["blog", "buy", "delivery"]
+# (채널 페이지, 우리 채널명). 카테고리·유형은 카드 안(제목 [카테고리] + 유형태그)에 있어 페이지 무관.
+PAGES = [("blog", "블로그"), ("instagram", "인스타"), ("short", "릴스"), ("buy", "블로그")]
 _ID_RE = re.compile(r"/campaign/detail/(\d+)")
 _DAY_RE = re.compile(r"(\d+)\s*일\s*남음")
 _REC_RE = re.compile(r"([\d,]+)\s*인\s*모집")
 _APP_RE = re.compile(r"([\d,]+)\s*인\s*참여")
+# 제목 첫 대괄호 = 소스 카테고리(topic). 소스 9종.
+_CATSET = {"맛집", "뷰티", "서비스", "패션", "디지털", "유아", "생활", "식품", "반려동물"}
+# 방문형일 때 카테고리 → 우리 표준. 생활=골프·와인 등 여가시설, 패션/유아=체험·대여 → 여가.
+_VISIT = {"맛집": "맛집", "식품": "맛집", "뷰티": "뷰티",
+          "생활": "여가", "패션": "여가", "유아": "여가",
+          "서비스": "기타", "디지털": "기타", "반려동물": "기타"}
+_LEAD_CAT_RE = re.compile(r"^\s*\[(맛집|뷰티|서비스|패션|디지털|유아|생활|식품|반려동물)\]\s*")
 log = logging.getLogger(__name__)
 
 
@@ -33,14 +41,19 @@ def _to_int(s) -> Optional[int]:
         return None
 
 
-def _category(text: str) -> str:
-    # 소스 유형 태그(#방문형/#배송형/#구매형) → 표준 카테고리. 방문형은 제목으로 분류(빈값).
+def _category(title0: str, text: str) -> str:
+    """유형 태그 우선(배송형/구매형→배송, 리뷰형=홍보기자단→기자단), 방문형은 제목 [카테고리]로."""
+    m = re.match(r"\s*\[([^\]]+)\]", title0)
+    cat = m.group(1).strip() if m else ""
+    cat = cat if cat in _CATSET else ""
     if "배송형" in text or "구매형" in text:
         return "배송"
-    return ""
+    if "리뷰형" in text:
+        return "기자단"
+    return _VISIT.get(cat, "기타")            # 방문형/유형태그 없음 → 카테고리로
 
 
-def _parse(html: str) -> List[Campaign]:
+def _parse(html: str, channel: str = "블로그") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out = []
     for ci in soup.select(".campaign-image"):
@@ -87,11 +100,14 @@ def _parse(html: str) -> List[Campaign]:
             if image.startswith("//"):
                 image = "https:" + image
 
-        title = (title0 + (f" {sub}" if sub else "")).strip()
+        category = _category(title0, txt)
+        # 표시용 제목에서 앞쪽 [카테고리] 접두사는 제거([지역]은 유지 → 지역 추출/표시)
+        disp = _LEAD_CAT_RE.sub("", title0)
+        title = (disp + (f" {sub}" if sub else "")).strip()
         out.append(Campaign(
             site="cloudreview", site_name="클라우드리뷰", cid=cid, title=title,
             url=f"{BASE}/campaign/detail/{cid}",
-            region=guess_region(title0), category=_category(txt), channel="블로그",
+            region=guess_region(title0), category=category, channel=channel,
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
         ))
@@ -108,13 +124,13 @@ class CloudreviewAdapter(BaseAdapter):
         out, seen = [], set()
         headers = {"User-Agent": UA, "Referer": BASE + "/"}
         log.info("[cloudreview] 수집 시작...")
-        for page in PAGES:
+        for page, channel in PAGES:
             try:
                 html = await self.get(client, f"{BASE}/campaign/{page}", headers=headers)
             except Exception as e:
                 log.warning("[cloudreview] %s 요청 실패: %s", page, e)
                 continue
-            page_new = [c for c in _parse(html) if c.cid not in seen]
+            page_new = [c for c in _parse(html, channel) if c.cid not in seen]
             for c in page_new:
                 seen.add(c.cid)
             out.extend(page_new)
