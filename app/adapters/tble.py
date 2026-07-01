@@ -19,8 +19,23 @@ from .base import BaseAdapter, Campaign, guess_region, UA
 
 BASE = "https://tble.kr"
 LIST = BASE + "/category.php?type={type}"
-# (type, 표준 카테고리). l/shorts 는 빈값(제목으로 분류). 캠페인 중복은 cid 로 제거.
-CATS = [("r", "기자단"), ("d", "배송"), ("p", "배송"), ("c", "배송"), ("l", ""), ("shorts", "")]
+LIST_CA = BASE + "/category.php?type={type}&ca={ca}"
+# (type, ca, 우리 카테고리). 소스 그대로: 방문(l)은 세부 ca 주제로, 제품(p)·영수증(d)·구매평(c)은 배송,
+# 기자단(r)은 기자단. 숏폼은 소스 주제가 없어 제목분류(빈값 → record_campaign). 캠페인 중복은 cid 로 제거.
+CATS = [
+    ("r", None, "기자단"),
+    ("p", None, "배송"),        # 제품(뷰티 화장품 포함 전부 배송)
+    ("c", None, "배송"),        # 구매평(온라인 구매 제품)
+    ("l", "맛집", "맛집"),      # 방문 세부(소스 주제) - 영수증보다 먼저 잡아 topic 우선
+    ("l", "뷰티샵", "뷰티"),
+    ("l", "숙박", "여가"),
+    ("l", "문화", "여가"),
+    ("l", "스페셜", "기타"),
+    ("l", "기타", "기타"),
+    ("d", None, ""),            # 영수증 = 매장 방문+영수증리뷰(음식점·카페·마사지) → 제목 분류(배송 아님)
+    ("l", None, ""),            # 방문 중 세부 ca 없는 leftover → 제목 분류(누락 방지)
+    ("shorts", None, ""),       # 숏폼: 소스 주제 없음 → 제목 분류
+]
 _ID_RE = re.compile(r"cp_id=(\d+)")
 _DAY_RE = re.compile(r"(\d+)\s*일\s*남음")
 _APPLY_RE = re.compile(r"신청\s*([\d,]+).*?모집\s*([\d,]+)")
@@ -90,13 +105,11 @@ def _parse(html: str, category: str) -> List[Campaign]:
             else:
                 image = s
 
-        # tble 유형(d/p/c→배송)은 방문 서비스(피부과 등)까지 배송으로 오분류 →
-        # 제목 내용으로 먼저 분류하고, 못 잡으면 유형(기자단/배송)으로 폴백.
-        from ..matcher import classify_with_fallback
+        # 카테고리는 소스(type+ca) 그대로 사용. 빈값(숏폼)만 record_campaign 이 제목으로 분류.
         out.append(Campaign(
             site="tble", site_name="티블", cid=cid, title=title,
             url=f"{BASE}/view.php?cp_id={cid}",
-            region=guess_region(title), category=classify_with_fallback(title, category), channel=ch,
+            region=guess_region(title), category=category, channel=ch,
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
         ))
@@ -113,11 +126,13 @@ class TbleAdapter(BaseAdapter):
         out, seen = [], set()
         headers = {"User-Agent": UA, "Referer": BASE + "/"}
         log.info("[tble] 수집 시작...")
-        for typ, cat in CATS:
+        from urllib.parse import quote
+        for typ, ca, cat in CATS:
+            url = LIST_CA.format(type=typ, ca=quote(ca)) if ca else LIST.format(type=typ)
             try:
-                html = (await client.get(LIST.format(type=typ), headers=headers, timeout=20.0)).text
+                html = (await client.get(url, headers=headers, timeout=20.0)).text
             except Exception as e:
-                log.warning("[tble] type=%s 요청 실패: %s", typ, e)
+                log.warning("[tble] type=%s ca=%s 요청 실패: %s", typ, ca, e)
                 continue
             page_new = [c for c in _parse(html, cat) if c.cid not in seen]
             for c in page_new:
@@ -125,7 +140,7 @@ class TbleAdapter(BaseAdapter):
             out.extend(page_new)
             if on_page and page_new:
                 on_page(page_new)
-            log.info("[tble] type=%s +%d건 (누적 %d건)", typ, len(page_new), len(out))
+            log.info("[tble] type=%s ca=%s +%d건 (누적 %d건)", typ, ca, len(page_new), len(out))
             await asyncio.sleep(0.3)
         log.info("[tble] 수집 완료 (총 %d건)", len(out))
         return out
