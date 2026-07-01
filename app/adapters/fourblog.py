@@ -36,16 +36,22 @@ def _to_int(s) -> Optional[int]:
 
 def _channel(c: str) -> str:
     c = (c or "").lower()
-    if "blog" in c:
+    if "blog" in c or "cafe" in c:      # blog, ncafe(네이버카페) → 블로그(글)
         return "블로그"
-    if "insta" in c:
+    if "insta" in c:                    # instar21
         return "인스타"
-    if "reel" in c:
+    if "reel" in c:                     # reels
         return "릴스"
-    if "short" in c or "youtube" in c or "유튜브" in c:
+    if "short" in c:                    # shorts → 숏츠(유튜브 아님)
+        return "숏츠"
+    if "youtube" in c:                  # youtube21
         return "유튜브"
     if "clip" in c:
         return "클립"
+    if "tiktok" in c:
+        return "틱톡"
+    if "thread" in c:                   # threads
+        return "스레드"
     return ""
 
 
