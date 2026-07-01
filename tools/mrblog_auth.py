@@ -13,6 +13,13 @@ import subprocess
 import sys
 import time
 
+# Windows 콘솔(cp949)에서 한글/기호(—, ✅) 출력 시 크래시 방지
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from playwright.sync_api import sync_playwright
 
 BASE = "https://www.mrblog.net"
@@ -73,12 +80,16 @@ def run(mode: str) -> int:
                 print("  열린 창에서 '네이버'로 로그인하세요('로그인 유지' 체크!).")
                 print("  로그인되면 자동 저장합니다 (최대 5분).")
                 print("=" * 56, flush=True)
-                deadline = time.time() + 300
+                deadline = time.time() + 600          # 10분 대기
                 while time.time() < deadline:
-                    time.sleep(3)
+                    time.sleep(4)
                     if _logged_in(ctx):
+                        print("로그인 감지됨! 저장 중...", flush=True)
                         return _save_and_restart(ctx)
-                print("시간 초과 — 다시 시도해주세요."); return 2
+                    left = int(deadline - time.time())
+                    if left % 30 < 4:
+                        print(f"  ...로그인 대기 중 (남은 {left}s)", flush=True)
+                print("시간 초과. 창에서 로그인을 마치치 못했어요. 다시 실행해주세요."); return 2
             else:  # refresh: 저장된 네이버 세션으로 OAuth 자동 재승인
                 page.goto(BASE + "/login/naver", wait_until="domcontentloaded", timeout=30000)
                 deadline = time.time() + 40
