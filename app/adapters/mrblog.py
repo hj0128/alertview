@@ -15,12 +15,23 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .. import config
-from .base import BaseAdapter, Campaign, guess_in, CATEGORIES, UA
+from .base import BaseAdapter, Campaign, UA
 
 BASE = "https://www.mrblog.net"
 # 로그인 후 무한스크롤 API(JSON {count, html}). page=N, count==0 이면 끝.
-XHR = (BASE + "/xhr/campaigns?type=all&page={page}&category=&order_by=1"
+# category=<주제명> 으로 소스 주제 카테고리별 필터링(홈 필터의 7개와 동일).
+XHR = (BASE + "/xhr/campaigns?type=all&page={page}&category={cat}&order_by=1"
        "&is_instagram%5B0%5D=0&is_instagram%5B1%5D=1&category_seq=")
+# 미블 소스 주제 카테고리(정확히 7개) → 우리 8종 매핑. 한 주제 안에 방문/배송/온라인 유형이 섞여 있다.
+CATS = [
+    ("맛집", "맛집"),
+    ("패션", "배송"),
+    ("뷰티", "뷰티"),
+    ("식품", "배송"),
+    ("생활", "배송"),
+    ("여행/체험", "여가"),
+    ("취미/레저", "여가"),
+]
 _CSRF_RE = re.compile(r'name="csrf-token"\s+content="([^"]+)"')
 _ID_RE = re.compile(r"/campaigns/(\d+)")
 _DAY_RE = re.compile(r"(\d+)\s*일\s*남음")
@@ -36,7 +47,7 @@ def _to_int(s) -> Optional[int]:
         return None
 
 
-def _parse(html: str) -> List[Campaign]:
+def _parse(html: str, default_cat: str = "") -> List[Campaign]:
     soup = BeautifulSoup(html, "html.parser")
     out, seen = [], set()
     for a in soup.select("a.campaign_item"):
@@ -55,8 +66,8 @@ def _parse(html: str) -> List[Campaign]:
         desc_el = a.select_one(".desc")
         desc = desc_el.get_text(" ", strip=True) if desc_el else ""
 
-        # 채널 + 지역: .area 안의 라벨/아이콘 span 으로 채널 판별, 나머지 텍스트가 지역
-        channel, region = "블로그", ""
+        # 채널 + 지역/유형: .area 안의 라벨/아이콘 span 으로 채널 판별, 나머지 텍스트가 지역 또는 유형 라벨
+        channel, region, area_text = "블로그", "", ""
         area_el = a.select_one(".area")
         if area_el:
             tokens = set()
@@ -72,9 +83,16 @@ def _parse(html: str) -> List[Campaign]:
                 channel = "인스타"
             for sp in area_el.find_all("span"):
                 sp.extract()
-            region = re.sub(r"\s+", " ", area_el.get_text(" ", strip=True)).strip()
-            if region in _AREA_SKIP:
-                region = ""
+            area_text = re.sub(r"\s+", " ", area_el.get_text(" ", strip=True)).strip()
+            region = "" if area_text in _AREA_SKIP else area_text
+
+        # 카테고리: 소스 주제 매핑(default_cat)이 기본. 단, 유형 라벨이 기자단/구매평이면 그쪽으로 보정.
+        if "기자단" in area_text:
+            category = "기자단"
+        elif "구매평" in area_text:
+            category = "배송"
+        else:
+            category = default_cat
 
         dday_el = a.select_one(".d_day")
         dday_txt = dday_el.get_text(" ", strip=True) if dday_el else ""
@@ -105,7 +123,7 @@ def _parse(html: str) -> List[Campaign]:
         out.append(Campaign(
             site="mrblog", site_name="미블", cid=cid, title=title.strip(),
             url=f"{BASE}/campaigns/{cid}",
-            region=region, category=guess_in(subject + " " + desc, CATEGORIES),
+            region=region, category=category,
             channel=channel,
             dday=dday, applicants=applicants, recruit=recruit, competition=competition,
             image=image, extra=(f"D-{dday}" if dday is not None else ""),
@@ -117,6 +135,9 @@ class MrblogAdapter(BaseAdapter):
     key = "mrblog"
     name = "미블"
     enabled = True
+    # 로그인 세션이면 7개 주제 카테고리를 전부 완주 → 소스에서 내려간 캠페인 자동 정리 가능.
+    # (쿠키 만료 시엔 홈 폴백=partial → _prune_unseen 이 자동 보류)
+    prunable = True
     cookie_expired = False     # 폴러가 읽어 관리자에게 만료 알림을 보낸다
     partial = False            # 부분 수집(쿠키만료 폴백 등) → 폴러가 백필 완료로 찍지 않음
 
@@ -170,30 +191,34 @@ class MrblogAdapter(BaseAdapter):
                    "X-CSRF-TOKEN": csrf, "Referer": BASE + "/campaigns"}
         cap = config.DQ_MAX_PAGES if config.DQ_MAX_PAGES > 0 else 500
         out, seen = [], set()
-        log.info("[mrblog] 수집 시작(로그인 세션, 전체 목록)...")
-        for page in range(1, cap + 1):
-            try:
-                resp = await client.get(XHR.format(page=page), headers=headers, timeout=20.0)
-                data = resp.json()
-            except Exception as e:
-                # 부분 수집을 '완료'로 오인하지 않도록 표시(다음 수집에서 전체 재시도)
-                log.warning("[mrblog] page=%d 요청 실패(중단): %s", page, e)
-                self.partial = True
-                break
-            if not data.get("count"):
-                break                          # 마지막 페이지
-            page_new = [c for c in _parse(data.get("html") or "") if c.cid not in seen]
-            for c in page_new:
-                seen.add(c.cid)
-            out.extend(page_new)
-            keep = True
-            if on_page and page_new:
-                keep = on_page(page_new)
-            log.info("[mrblog] page=%d +%d건 (누적 %d건)", page, len(page_new), len(out))
-            if not page_new:
-                break
-            if keep is False:
-                break
-            await asyncio.sleep(0.3)
+        from urllib.parse import quote
+        log.info("[mrblog] 수집 시작(로그인 세션, 주제 카테고리별)...")
+        for cat_name, our_cat in CATS:
+            n0 = len(out)
+            for page in range(1, cap + 1):
+                url = XHR.format(page=page, cat=quote(cat_name, safe=""))
+                try:
+                    resp = await client.get(url, headers=headers, timeout=20.0)
+                    data = resp.json()
+                except Exception as e:
+                    # 부분 수집을 '완료'로 오인하지 않도록 표시(다음 수집에서 전체 재시도)
+                    log.warning("[mrblog] %s page=%d 요청 실패(중단): %s", cat_name, page, e)
+                    self.partial = True
+                    break
+                if not data.get("count"):
+                    break                          # 마지막 페이지
+                page_new = [c for c in _parse(data.get("html") or "", our_cat) if c.cid not in seen]
+                for c in page_new:
+                    seen.add(c.cid)
+                out.extend(page_new)
+                keep = True
+                if on_page and page_new:
+                    keep = on_page(page_new)
+                if not page_new:
+                    break
+                if keep is False:
+                    break
+                await asyncio.sleep(0.3)
+            log.info("[mrblog] category=%s +%d건 (누적 %d건)", cat_name, len(out) - n0, len(out))
         log.info("[mrblog] 수집 완료 (%d건, 로그인 세션)", len(out))
         return out
