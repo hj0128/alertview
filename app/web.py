@@ -1041,6 +1041,8 @@ async function load(){
     NUMF.forEach(([k])=>{ if(k in S) S[k]=null; });
     if(!guest){ try{ await post('/api/clear',{type:'all'}); }catch(e){} }
   }
+  // only/q 는 '한 번 진입'용 → 주소창에서 제거(새로고침 시 되살아나지 않게, 검색 지우면 실제로 지워지게)
+  if(only||uq){ try{ history.replaceState({}, '', location.pathname); }catch(e){} }
   document.getElementById('sortsel').value=feedSort;     // 드롭다운에 현재 정렬 반영
   const fb=document.getElementById('favtgl');
   fb.classList.toggle('on',favOnly); fb.textContent=favOnly?'♥ 찜만':'♡ 찜';
