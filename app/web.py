@@ -181,7 +181,10 @@ async def map_page(request: Request):
     return HTMLResponse("""<!doctype html><html lang=ko><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>지역 지도 · 체험단</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <style>html,body{margin:0;height:100%;font-family:-apple-system,'Malgun Gothic',sans-serif}
 #bar{position:fixed;z-index:1000;top:0;left:0;right:0;height:46px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.1);
   display:flex;align-items:center;gap:12px;padding:0 14px}
@@ -189,23 +192,33 @@ async def map_page(request: Request):
 #map{position:absolute;top:46px;bottom:0;left:0;right:0}
 .cmark .b{background:#3b6ef6;color:#fff;border-radius:16px;min-width:26px;height:26px;padding:0 6px;
   display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);border:2px solid #fff}</style></head><body>
+  box-shadow:0 2px 6px rgba(0,0,0,.3);border:2px solid #fff}
+.cmark .b.clus{background:#e59409}</style></head><body>
 <div id=bar><b>🗺 지역별 체험단</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span><a href="/">← 피드로</a></div>
 <div id=map></div>
 <script>
 const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
+function bubble(n,cls){const sz=Math.min(58,26+Math.round(Math.log2(n+1))*3.5);
+  return L.divIcon({className:'cmark',html:'<div class="b '+cls+'" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
+const cluster=L.markerClusterGroup({
+  showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:48,
+  iconCreateFunction:function(c){                       // 클러스터 버블 = 자식들의 캠페인 수 '합계'
+    let sum=0; c.getAllChildMarkers().forEach(m=>{sum+=(m.options.cnt||0);});
+    return bubble(sum,'clus');
+  }
+});
 fetch('/api/map').then(r=>r.json()).then(d=>{
   const pts=d.points||[];
   document.getElementById('hint').textContent=pts.length+'개 지역';
   pts.forEach(p=>{
     if(p.lat==null||p.lng==null)return;
-    const sz=Math.min(52,26+Math.round(Math.log2(p.cnt+1))*4);
-    const icon=L.divIcon({className:'cmark',html:'<div class="b" style="min-width:'+sz+'px;height:'+sz+'px">'+p.cnt+'</div>',iconSize:[sz,sz]});
     const url='/?q='+encodeURIComponent(p.region);
-    L.marker([p.lat,p.lng],{icon}).addTo(map)
-      .bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역 캠페인 보기 →</a>');
+    const m=L.marker([p.lat,p.lng],{icon:bubble(p.cnt,''),cnt:p.cnt});
+    m.bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역 캠페인 보기 →</a>');
+    cluster.addLayer(m);
   });
+  map.addLayer(cluster);
 }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
 </script></body></html>""", headers={"Cache-Control": "no-store"})
 
