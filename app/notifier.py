@@ -106,11 +106,15 @@ async def _send(bot: Bot, chat_id, text: str) -> bool:
 
 
 async def flush_pending(bot: Bot) -> int:
-    """방해금지 시간이 아니면 대기열에 쌓인 알림을 순서대로 발송."""
+    """방해금지 시간이 아니면 대기열 알림 발송. 단, 알림 끈 사용자(active=0)에겐 보내지 않고 큐에서 제거."""
     if not bot or _in_quiet_hours():
         return 0
+    active = set(db.active_users())
     sent = 0
     for row in db.list_pending():
+        if row["chat_id"] not in active:
+            db.delete_pending(row["id"])       # 알림 끈 사용자 → 발송 안 함
+            continue
         if await _send(bot, row["chat_id"], row["text"]):
             db.delete_pending(row["id"])
             sent += 1
