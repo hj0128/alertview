@@ -67,3 +67,8 @@ FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "20000"))
 # 종료(마감) 캠페인 정리: 피드에선 마감일 지나면 즉시 숨기고, 마감 후 이 일수가
 # 지나면 DB 에서 삭제(유예). 0 이면 삭제 안 함(숨기기만).
 PURGE_GRACE_DAYS = int(os.getenv("PURGE_GRACE_DAYS", "3"))
+
+# 방해금지(밤) 시간대: 이 시간엔 텔레그램 알림을 보내지 않고 대기열에 쌓았다가 종료 후 발송.
+# QUIET_START~QUIET_END (24h, 로컬시각=KST). 자정을 넘는 구간 지원(예: 23~8). START==END 이면 비활성.
+QUIET_START = int(os.getenv("QUIET_START", "23"))
+QUIET_END = int(os.getenv("QUIET_END", "8"))

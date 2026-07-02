@@ -174,6 +174,12 @@ def _create_schema() -> None:
             ts TEXT, uid {int_pk}, contact TEXT, message TEXT, handled INTEGER DEFAULT 0
         )
         """,
+        f"""
+        CREATE TABLE IF NOT EXISTS pending_notify (
+            {"id BIGSERIAL PRIMARY KEY" if _is_pg() else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
+            chat_id {int_pk}, text TEXT, ts TEXT
+        )
+        """,
     ]
     for s in stmts:
         _conn.execute(s)
@@ -575,6 +581,27 @@ def mark_reminded(chat_id, site: str, cid: str) -> None:
         _c().execute(_q(
             "INSERT INTO reminders(chat_id,site,cid) VALUES(?,?,?) "
             "ON CONFLICT(chat_id,site,cid) DO NOTHING"), (chat_id, site, cid))
+        _c().commit()
+
+
+def enqueue_notify(chat_id, text: str) -> None:
+    """방해금지 시간대에 보류할 알림을 대기열에 저장."""
+    with _lock:
+        _c().execute(_q("INSERT INTO pending_notify(chat_id,text,ts) VALUES(?,?,?)"),
+                     (chat_id, text, _now()))
+        _c().commit()
+
+
+def list_pending(limit: int = 500) -> list:
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT id,chat_id,text FROM pending_notify ORDER BY id LIMIT ?"), (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_pending(pid) -> None:
+    with _lock:
+        _c().execute(_q("DELETE FROM pending_notify WHERE id=?"), (pid,))
         _c().commit()
 
 

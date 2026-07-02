@@ -60,6 +60,7 @@ async def remind_deadlines(bot: Bot) -> int:
     if not bot:
         return 0
     today = datetime.date.today()
+    quiet = _in_quiet_hours()
     sent = 0
     for chat_id in db.active_users():
         for r in db.favorites_rows(chat_id):
@@ -74,31 +75,60 @@ async def remind_deadlines(bot: Bot) -> int:
                 continue
             if db.is_reminded(chat_id, r["site"], r["cid"]):
                 continue
-            try:
-                await bot.send_message(chat_id=chat_id, text=_format_reminder(r, dleft),
-                                       parse_mode=ParseMode.HTML, disable_web_page_preview=False)
+            text = _format_reminder(r, dleft)
+            if quiet:                                    # 밤엔 대기열 + 처리표시(중복 방지)
+                db.enqueue_notify(chat_id, text)
+                db.mark_reminded(chat_id, r["site"], r["cid"])
+            elif await _send(bot, chat_id, text):
                 db.mark_reminded(chat_id, r["site"], r["cid"])
                 sent += 1
-                await asyncio.sleep(config.SEND_GAP)
-            except Exception as e:
-                log.warning("리마인더 발송 실패 chat_id=%s: %s", chat_id, e)
+    return sent
+
+
+def _in_quiet_hours() -> bool:
+    """방해금지(밤) 시간대인가. QUIET_START==END 면 비활성. 자정 넘김 지원(예: 23~8)."""
+    s, e = config.QUIET_START, config.QUIET_END
+    if s == e:
+        return False
+    h = datetime.datetime.now().hour
+    return (s <= h < e) if s < e else (h >= s or h < e)
+
+
+async def _send(bot: Bot, chat_id, text: str) -> bool:
+    try:
+        await bot.send_message(chat_id=chat_id, text=text,
+                               parse_mode=ParseMode.HTML, disable_web_page_preview=False)
+        await asyncio.sleep(config.SEND_GAP)
+        return True
+    except Exception as e:
+        log.warning("send fail chat_id=%s: %s", chat_id, e)
+        return False
+
+
+async def flush_pending(bot: Bot) -> int:
+    """방해금지 시간이 아니면 대기열에 쌓인 알림을 순서대로 발송."""
+    if not bot or _in_quiet_hours():
+        return 0
+    sent = 0
+    for row in db.list_pending():
+        if await _send(bot, row["chat_id"], row["text"]):
+            db.delete_pending(row["id"])
+            sent += 1
     return sent
 
 
 async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
     if not campaigns:
         return 0
+    quiet = _in_quiet_hours()
     sent = 0
     for chat_id in db.active_users():
         f = db.get_all_filters(chat_id)
         for c in campaigns:
             if matches_filter(c, f):
-                try:
-                    await bot.send_message(
-                        chat_id=chat_id, text=format_campaign(c),
-                        parse_mode=ParseMode.HTML, disable_web_page_preview=False)
+                text = format_campaign(c)
+                if quiet:
+                    db.enqueue_notify(chat_id, text)     # 밤엔 대기열 → 아침에 발송
+                elif await _send(bot, chat_id, text):
                     sent += 1
-                    await asyncio.sleep(config.SEND_GAP)
-                except Exception as e:
-                    log.warning("send fail chat_id=%s: %s", chat_id, e)
     return sent
