@@ -135,6 +135,12 @@ def _create_schema() -> None:
         )
         """,
         f"""
+        CREATE TABLE IF NOT EXISTS reminders (
+            chat_id {int_pk} NOT NULL, site TEXT NOT NULL, cid TEXT NOT NULL,
+            PRIMARY KEY(chat_id, site, cid)
+        )
+        """,
+        f"""
         CREATE TABLE IF NOT EXISTS presets (
             chat_id {int_pk} NOT NULL, name TEXT NOT NULL,
             payload TEXT, created_at TEXT,
@@ -555,6 +561,21 @@ def list_inquiries(limit: int = 100) -> list:
             "SELECT id,ts,uid,contact,message,handled FROM inquiries "
             "ORDER BY id DESC LIMIT ?"), (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def is_reminded(chat_id, site: str, cid: str) -> bool:
+    with _lock:
+        return _c().execute(_q(
+            "SELECT 1 AS x FROM reminders WHERE chat_id=? AND site=? AND cid=?"),
+            (chat_id, site, cid)).fetchone() is not None
+
+
+def mark_reminded(chat_id, site: str, cid: str) -> None:
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO reminders(chat_id,site,cid) VALUES(?,?,?) "
+            "ON CONFLICT(chat_id,site,cid) DO NOTHING"), (chat_id, site, cid))
+        _c().commit()
 
 
 def count_new_inquiries() -> int:

@@ -10,7 +10,7 @@ import httpx
 from . import db, config
 from .adapters import active_adapters
 from .adapters.base import Campaign
-from .notifier import notify_new
+from .notifier import notify_new, remind_deadlines
 from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
@@ -220,3 +220,6 @@ async def run_poll(bot, demo: bool) -> None:
     if new_items:
         sent = await notify_new(bot, new_items)
         log.info("신규 %d건 → 메시지 %d건 발송", len(new_items), sent)
+    reminded = await remind_deadlines(bot)      # 찜한 캠페인 마감임박(D-1~D-0) 리마인더
+    if reminded:
+        log.info("마감임박 리마인더 %d건 발송", reminded)
