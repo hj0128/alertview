@@ -157,6 +157,17 @@ def _create_schema() -> None:
             ts TEXT, ip TEXT, path TEXT, referrer TEXT, ua TEXT, uid {int_pk}
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS adapter_health (
+            key TEXT PRIMARY KEY, ts TEXT, cnt INTEGER, status TEXT, note TEXT
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS inquiries (
+            {"id BIGSERIAL PRIMARY KEY" if _is_pg() else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
+            ts TEXT, uid {int_pk}, contact TEXT, message TEXT, handled INTEGER DEFAULT 0
+        )
+        """,
     ]
     for s in stmts:
         _conn.execute(s)
@@ -512,6 +523,44 @@ def prune_visits(days: int = 90) -> int:
         cur = _c().execute(_q("DELETE FROM visits WHERE ts < ?"), (cutoff,))
         _c().commit()
         return cur.rowcount or 0
+
+
+def set_adapter_health(key: str, cnt: int, status: str, note: str = "") -> None:
+    """수집 결과 기록. status: ok / zero / partial / error."""
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO adapter_health(key,ts,cnt,status,note) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET ts=excluded.ts,cnt=excluded.cnt,"
+            "status=excluded.status,note=excluded.note"),
+            (key, _now(), int(cnt or 0), status, (note or "")[:200]))
+        _c().commit()
+
+
+def get_adapter_health() -> list:
+    with _lock:
+        rows = _c().execute("SELECT key,ts,cnt,status,note FROM adapter_health ORDER BY key").fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_inquiry(uid, contact: str, message: str) -> None:
+    with _lock:
+        _c().execute(_q("INSERT INTO inquiries(ts,uid,contact,message,handled) VALUES(?,?,?,?,0)"),
+                     (_now(), uid, (contact or "")[:120], (message or "")[:2000]))
+        _c().commit()
+
+
+def list_inquiries(limit: int = 100) -> list:
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT id,ts,uid,contact,message,handled FROM inquiries "
+            "ORDER BY id DESC LIMIT ?"), (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_new_inquiries() -> int:
+    with _lock:
+        row = _c().execute("SELECT count(*) AS n FROM inquiries WHERE handled=0").fetchone()
+    return row["n"] if row else 0
 
 
 def backfill_done(site: str) -> bool:

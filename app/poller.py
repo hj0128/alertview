@@ -58,11 +58,21 @@ async def collect_new(demo: bool) -> List[Campaign]:
                 # 백필이 끝까지 못 감 → 완료 플래그 미설정 → 다음 수집에서 재시도(자가 치유)
                 log.warning("[%s] fetch 실패%s: %s",
                             ad.key, " (백필 미완료 → 다음 수집에 재시도)" if deep else "", e)
+                db.set_adapter_health(ad.key, 0, "error", str(e))
                 continue
             if deep and not getattr(ad, "partial", False):
                 db.set_backfill_done(ad.key)       # 전체 크롤 정상 완료 → 이후 증분 모드
             if iv > 0:
                 db.meta_set(f"last_poll:{ad.key}", str(time.time()))   # 주기 어댑터: 마지막 수집시각 기록
+            # 수집 건강 상태 기록: 0건=zero(소스 이상 의심), 부분수집=partial, 정상=ok
+            cnt = len(seen_cids)
+            if getattr(ad, "partial", False) or getattr(ad, "cookie_expired", False):
+                status = "partial"
+            elif cnt == 0:
+                status = "zero"
+            else:
+                status = "ok"
+            db.set_adapter_health(ad.key, cnt, status)
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
                      " (전체 백필: 알림생략)" if deep else "")
             _prune_unseen(ad, seen_cids)           # 소스에서 내려간 활성 캠페인 자동 삭제
@@ -117,6 +127,29 @@ async def _check_mrblog_cookie(bot, demo: bool) -> None:
                 log.warning("미블 만료 알림 실패: %s", e)
     else:
         _mrblog_alerted = False    # 정상 복구 시 다음 만료 때 다시 알릴 수 있도록 리셋
+
+
+_health_alerted: set = set()
+
+
+async def _check_adapter_health(bot) -> None:
+    """수집 이상(에러/0건) 어댑터를 관리자에게 알림. 상태 전환 시 1회(복구되면 자동 해제)."""
+    global _health_alerted
+    if not (bot and config.ADMIN_CHAT_ID):
+        return
+    bad = {h["key"]: h for h in db.get_adapter_health() if h["status"] in ("error", "zero")}
+    for key in set(bad) - _health_alerted:
+        h = bad[key]
+        try:
+            await bot.send_message(
+                chat_id=int(config.ADMIN_CHAT_ID),
+                text=(f"⚠️ 수집 이상: [{key}] → {h['status']}"
+                      + (f"\n{h['note']}" if h.get("note") else "")
+                      + "\n(/admin 에서 사이트별 상태 확인)"))
+            log.info("헬스 이상 알림 발송: %s (%s)", key, h["status"])
+        except Exception as e:
+            log.warning("헬스 알림 실패(%s): %s", key, e)
+    _health_alerted = set(bad)
 
 
 async def _kakao_backfill() -> None:
@@ -182,6 +215,7 @@ async def run_poll(bot, demo: bool) -> None:
     if dropped:
         log.info("방문 로그 90일 지난 %d건 삭제", dropped)
     await _check_mrblog_cookie(bot, demo)
+    await _check_adapter_health(bot)
     await _kakao_backfill()
     if new_items:
         sent = await notify_new(bot, new_items)

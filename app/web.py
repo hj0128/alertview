@@ -88,6 +88,87 @@ th,td{{padding:8px 14px;text-align:left;border-bottom:1px solid #eef}} th{{backg
     return HTMLResponse(html_out, headers={"Cache-Control": "no-store"})
 
 
+def _is_admin(request: Request) -> bool:
+    return bool(config.ADMIN_CHAT_ID) and str(request.session.get("uid")) == str(config.ADMIN_CHAT_ID)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_home(request: Request):
+    if not _is_admin(request):
+        return HTMLResponse("<h3>권한 없음</h3><p>관리자 계정으로 로그인 후 접근하세요.</p>", status_code=403)
+    health = db.get_adapter_health()
+    inqs = db.list_inquiries(50)
+    vs = db.visit_stats(7)
+    _col = {"ok": "#15a34a", "zero": "#e11d48", "error": "#e11d48", "partial": "#e59409"}
+
+    def bad_first(h):
+        return (0 if h["status"] in ("error", "zero") else 1 if h["status"] == "partial" else 2, h["key"])
+    hrows = "".join(
+        f"<tr><td>{_esc(_SITE_NAMES.get(h['key'], h['key']))}</td>"
+        f"<td><b style=\"color:{_col.get(h['status'], '#888')}\">{h['status']}</b></td>"
+        f"<td>{h['cnt']}</td><td>{(h['ts'] or '')[:16]}</td>"
+        f"<td>{_esc(str(h.get('note') or ''))[:70]}</td></tr>"
+        for h in sorted(health, key=bad_first)) or "<tr><td colspan=5>수집 기록 없음(폴러 1회 실행 후 표시)</td></tr>"
+    irows = "".join(
+        f"<tr><td>{(i['ts'] or '')[:16]}</td><td>{_esc(str(i.get('contact') or '-'))}</td>"
+        f"<td>{_esc(str(i['message']))}</td></tr>" for i in inqs) or "<tr><td colspan=3>문의 없음</td></tr>"
+    html_out = f"""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>관리자</title>
+<style>body{{font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f5f6f8;margin:0;padding:20px;color:#1f2533}}
+h2{{margin:22px 0 8px}} a{{color:#3b6ef6}}
+table{{border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.06);width:100%;max-width:820px}}
+th,td{{padding:8px 12px;text-align:left;border-bottom:1px solid #eef;font-size:14px;vertical-align:top}} th{{background:#f0f3fa}}</style></head><body>
+<h1>🛠 관리자 대시보드</h1>
+<p>최근 7일 방문 <b>{vs['total']['v']}</b> (순 {vs['total']['u']}) · <a href="/admin/stats">방문 통계 자세히 →</a></p>
+<h2>📡 수집 상태 (사이트별)</h2>
+<table><tr><th>사이트</th><th>상태</th><th>건수</th><th>마지막 수집</th><th>비고</th></tr>{hrows}</table>
+<h2>💬 사용자 문의 ({db.count_new_inquiries()} 신규)</h2>
+<table><tr><th>시각</th><th>연락처</th><th>내용</th></tr>{irows}</table>
+</body></html>"""
+    return HTMLResponse(html_out, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/inquiry", response_class=HTMLResponse)
+async def inquiry_page(request: Request):
+    return HTMLResponse(f"""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>문의/건의</title>
+<style>body{{font-family:-apple-system,'Malgun Gothic',sans-serif;background:#f5f6f8;margin:0;padding:24px;color:#1f2533}}
+.card{{background:#fff;border-radius:16px;padding:24px;max-width:480px;margin:0 auto;box-shadow:0 2px 16px rgba(0,0,0,.06)}}
+h1{{font-size:20px}} label{{display:block;margin:14px 0 6px;font-weight:600}}
+input,textarea{{width:100%;box-sizing:border-box;padding:10px;border:1px solid #dde;border-radius:8px;font-size:15px}}
+textarea{{min-height:120px}} button{{margin-top:16px;width:100%;padding:12px;background:#3b6ef6;color:#fff;border:0;border-radius:8px;font-size:16px;cursor:pointer}}
+.msg{{margin-top:12px;color:#15a34a}}</style></head><body><div class=card>
+<h1>💬 문의 / 체험단 추가 요청</h1>
+<p style="color:#666;font-size:14px">넣었으면 하는 체험단, 버그, 건의 등 자유롭게 남겨주세요.</p>
+<label>연락처 (선택 — 이메일/텔레그램 등, 답변 원하시면)</label><input id=contact maxlength=120>
+<label>내용</label><textarea id=message maxlength=2000 placeholder="예: OO체험단도 추가해주세요"></textarea>
+<button onclick="send()">보내기</button><div class=msg id=msg></div></div>
+<script>
+async function send(){{
+ var m=document.getElementById('message').value.trim();
+ if(!m){{document.getElementById('msg').style.color='#e11';document.getElementById('msg').textContent='내용을 입력해주세요.';return;}}
+ var r=await fetch('/api/inquiry',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+   body:JSON.stringify({{contact:document.getElementById('contact').value,message:m}})}});
+ if(r.ok){{document.getElementById('msg').style.color='#15a34a';document.getElementById('msg').textContent='접수됐어요. 감사합니다! 🙏';
+   document.getElementById('message').value='';document.getElementById('contact').value='';}}
+ else{{document.getElementById('msg').style.color='#e11';document.getElementById('msg').textContent='잠시 후 다시 시도해주세요.';}}
+}}
+</script></body></html>""", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/inquiry")
+async def api_inquiry(request: Request):
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    msg = (b.get("message") or "").strip()
+    if not msg:
+        return JSONResponse({"ok": False, "error": "empty"}, status_code=400)
+    db.add_inquiry(request.session.get("uid"), (b.get("contact") or "").strip(), msg)
+    return JSONResponse({"ok": True})
+
+
 def verify_telegram_auth(data: dict) -> bool:
     recv = data.get("hash")
     if not recv or not config.BOT_TOKEN:
@@ -718,7 +799,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  #loginbar p{color:#e7eefc;font-size:13px;margin:0 0 13px;line-height:1.5}
  #loginbar .wrap{display:flex;justify-content:center;min-height:40px}
 </style></head><body><main>
-<header><h1>🔔 체험단 알림</h1><a class=logout href="/logout" id=logoutlink style="display:none">로그아웃</a></header>
+<header><h1>🔔 체험단 알림</h1><span style="display:flex;gap:14px;align-items:center"><a class=logout href="/inquiry">💬 문의</a><a class=logout href="/logout" id=logoutlink style="display:none">로그아웃</a></span></header>
 <p class=sub id=hello></p>
 
 <div id=loginbar style="display:none">
