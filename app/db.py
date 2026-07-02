@@ -724,12 +724,12 @@ def delete_campaigns(site: str, cids) -> int:
     return len(cids)
 
 
-def count_seen_new(date_prefix: str) -> int:
-    """first_seen 이 오늘인(=NEW) 캠페인 수."""
+def count_seen_new(cutoff: str) -> int:
+    """first_seen 이 cutoff(타임스탬프) 이후인(=최근 수집=NEW) 캠페인 수."""
     with _lock:
         return _c().execute(_q(
-            "SELECT COUNT(*) AS n FROM seen WHERE first_seen LIKE ?"),
-            (date_prefix + "%",)).fetchone()["n"]
+            "SELECT COUNT(*) AS n FROM seen WHERE first_seen >= ?"),
+            (cutoff,)).fetchone()["n"]
 
 
 def region_tree() -> dict:

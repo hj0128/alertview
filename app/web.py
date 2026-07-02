@@ -527,7 +527,8 @@ async def campaigns(request: Request, response: Response):
         sort = "recent"
     fav_only = request.query_params.get("fav") == "1" and not guest
 
-    today = time.strftime("%Y-%m-%d")  # '오늘' 올라온 캠페인 = NEW
+    # 최근 48시간 이내 수집 = NEW (달력 하루 리셋 대신 롤링 - 신청 하루 전 올라온 것도 유지)
+    new_cutoff = (datetime.datetime.now() - datetime.timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
 
     def _live_dday(r):
         # D-day 는 저장된 마감일에서 매번 계산(재수집 없이 매일 자동 감소)
@@ -551,7 +552,7 @@ async def campaigns(request: Request, response: Response):
             "channel": r["channel"] or "", "dday": _live_dday(r),
             "competition": r["competition"], "applicants": r["applicants"], "recruit": r["recruit"],
             "image": r["image"] if "image" in r.keys() else "",
-            "is_new": (r["first_seen"] or "").startswith(today),
+            "is_new": (r["first_seen"] or "") >= new_cutoff,
             "is_viewed": (r["site"], r["cid"]) in viewed,
             "is_fav": (r["site"], r["cid"]) in fav_set,
         }
@@ -582,7 +583,7 @@ async def campaigns(request: Request, response: Response):
     if not has_filter:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
         total = db.count_seen()
-        new_count = db.count_seen_new(today)
+        new_count = db.count_seen_new(new_cutoff)
         page = [_to_dict(r) for r in db.list_page(offset, limit, sort)]
         return {"campaigns": page, "new_count": new_count, "total": total,
                 "offset": offset, "limit": limit, "has_more": offset + limit < total}
