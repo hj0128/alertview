@@ -174,6 +174,35 @@ async def recommend_low_competition(bot: Bot, max_per_user: int = 5, threshold: 
     return sent
 
 
+async def send_daily_visit_report(bot: Bot) -> int:
+    """매일 1회(방해금지 종료 후) 관리자에게 방문 리포트 발송. 방문 0명이어도 보냄."""
+    if not bot or _in_quiet_hours() or not config.ADMIN_CHAT_ID:
+        return 0
+    today = datetime.date.today().isoformat()
+    if db.meta_get("visit_report_date") == today:
+        return 0
+    s = db.visit_stats(7)
+    yday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    yv = yu = 0
+    for d in s["daily"]:
+        if d["d"] == yday:
+            yv, yu = d["v"], d["u"]
+            break
+    text = (f"📊 <b>방문 리포트</b>\n\n"
+            f"어제({yday[5:]}) 방문 <b>{yv}</b>회 · 순 방문자 <b>{yu}</b>명\n"
+            f"최근 7일 방문 {s['total']['v']}회 · 순 {s['total']['u']}명\n"
+            f"오늘(지금까지) {s['today']['v']}회 · 순 {s['today']['u']}명\n\n"
+            f"자세히 → 웹 로그인 후 /admin/stats")
+    try:
+        await bot.send_message(chat_id=int(config.ADMIN_CHAT_ID), text=text, parse_mode=ParseMode.HTML)
+        log.info("방문 리포트 발송(관리자)")
+    except Exception as e:
+        log.warning("방문 리포트 발송 실패: %s", e)
+        return 0
+    db.meta_set("visit_report_date", today)
+    return 1
+
+
 async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
     if not campaigns:
         return 0

@@ -10,7 +10,8 @@ import httpx
 from . import db, config
 from .adapters import active_adapters
 from .adapters.base import Campaign
-from .notifier import notify_new, remind_deadlines, flush_pending, recommend_low_competition
+from .notifier import (notify_new, remind_deadlines, flush_pending,
+                       recommend_low_competition, send_daily_visit_report)
 from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
@@ -266,3 +267,4 @@ async def run_poll(bot, demo: bool) -> None:
     reco = await recommend_low_competition(bot)  # 매일 1회 경쟁률 낮은 추천
     if reco:
         log.info("경쟁률 낮은 추천 %d명 발송", reco)
+    await send_daily_visit_report(bot)           # 매일 1회 관리자 방문 리포트
