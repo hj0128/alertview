@@ -213,9 +213,9 @@ fetch('/api/map').then(r=>r.json()).then(d=>{
   document.getElementById('hint').textContent=pts.length+'개 지역';
   pts.forEach(p=>{
     if(p.lat==null||p.lng==null)return;
-    const url='/?q='+encodeURIComponent(p.region);
+    const url='/?only='+encodeURIComponent(p.region);   // 필터 초기화 후 이 지역만
     const m=L.marker([p.lat,p.lng],{icon:bubble(p.cnt,''),cnt:p.cnt});
-    m.bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역 캠페인 보기 →</a>');
+    m.bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역만 보기 →</a>');
     cluster.addLayer(m);
   });
   map.addLayer(cluster);
@@ -1033,7 +1033,14 @@ async function load(){
   const u=new URLSearchParams(location.search);          // URL 로 정렬·찜 지정 가능(공유/북마크)
   if(['recent','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
   favOnly=(u.get('fav')==='1') && !guest;
-  const uq=u.get('q'); if(uq){ searchQ=uq; const sb=document.getElementById('searchbox'); if(sb) sb.value=uq; }  // 지도→지역검색 진입
+  const uq=u.get('q'); if(uq){ searchQ=uq; const sb=document.getElementById('searchbox'); if(sb) sb.value=uq; }  // ?q= 검색 진입
+  const only=u.get('only');   // 지도에서 지역 클릭: 다른 필터 전부 초기화하고 그 지역만
+  if(only){
+    searchQ=only; const sb2=document.getElementById('searchbox'); if(sb2) sb2.value=only;
+    ['sites','keywords','regions','categories','channels'].forEach(k=>{ if(Array.isArray(S[k])) S[k]=[]; });
+    NUMF.forEach(([k])=>{ if(k in S) S[k]=null; });
+    if(!guest){ try{ await post('/api/clear',{type:'all'}); }catch(e){} }
+  }
   document.getElementById('sortsel').value=feedSort;     // 드롭다운에 현재 정렬 반영
   const fb=document.getElementById('favtgl');
   fb.classList.toggle('on',favOnly); fb.textContent=favOnly?'♥ 찜만':'♡ 찜';
@@ -1067,6 +1074,7 @@ let searchQ='';
 function doSearch(){ searchQ=(document.getElementById('searchbox').value||'').trim(); loadCampaigns(true); }
 let mergeOn=true;
 function toggleMerge(){ mergeOn=!mergeOn; document.getElementById('mergetgl').classList.toggle('on',mergeOn); loadCampaigns(true); }
+function resetAll(){ searchQ=''; const s=document.getElementById('searchbox'); if(s)s.value=''; clearAll(); }
 function changeSort(){ feedSort=document.getElementById('sortsel').value; loadCampaigns(true); }
 function toggleFavOnly(){
   favOnly=!favOnly;
@@ -1095,7 +1103,11 @@ async function loadCampaigns(reset=true){
   feedOffset+=d.campaigns.length;
   feedDone=!d.has_more;
   if(reset && !d.campaigns.length){
-    document.getElementById('feed').innerHTML='<p class=muted style="grid-column:1/-1">\uc870\uac74\uc5d0 \ub9de\ub294 \ucea0\ud398\uc778\uc774 \uc544\uc9c1 \uc5c6\uc5b4\uc694.</p>';
+    document.getElementById('feed').innerHTML=
+      '<div class=muted style="grid-column:1/-1;text-align:center;padding:36px 12px;line-height:1.7">'+
+      '\uc120\ud0dd\ud55c \ud544\ud130\uc5d0 \ub9de\ub294 \ucea0\ud398\uc778\uc774 \uc5c6\uc5b4\uc694.<br>'+
+      '\uc9c0\uc5ed\u00b7\uce74\ud14c\uace0\ub9ac\u00b7\uc0ac\uc774\ud2b8\u00b7\ucc44\ub110 \ub4f1 \uc5ec\ub7ec \uc870\uac74\uc774 \uac19\uc774 \uac78\ub824 \uc788\uc744 \uc218 \uc788\uc5b4\uc694.<br>'+
+      '<button class=clearbtn style="margin-top:14px" onclick="resetAll()">\ud544\ud130 \uc804\uccb4 \ud574\uc81c</button></div>';
   }
   feedLoading=false;
 }
