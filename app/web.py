@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import re
 import time
 from html import escape as _esc
 
@@ -188,6 +189,34 @@ def verify_telegram_auth(data: dict) -> bool:
 
 def _uid(request: Request):
     return request.session.get("uid")
+
+
+_MERGE_BRK = re.compile(r"\[[^\]]*\]")           # [지역]·[채널]·[카테고리] 태그
+_MERGE_NONCORE = re.compile(r"[\s\-_/()·.,!~+]+")
+
+
+def _merge_key(title: str, region: str) -> str:
+    """중복 병합 키: 대괄호 태그 제거 + 공백/기호 제거한 제목 + 지역. 완전일치만 병합(오병합 방지)."""
+    t = _MERGE_NONCORE.sub("", _MERGE_BRK.sub("", title or "")).lower()
+    return (region or "").replace(" ", "") + "|" + t
+
+
+def _collapse(items: list) -> list:
+    """정렬된 목록에서 같은 키를 대표 1건으로 접고, 나머지는 dup_count/dup_sites 로 표기."""
+    keys, out = {}, []
+    for d in items:
+        k = _merge_key(d["title"], d["region"])
+        rep = keys.get(k)
+        if rep is not None:
+            rep["dup_count"] += 1
+            if d["site_name"] not in rep["dup_sites"]:
+                rep["dup_sites"].append(d["site_name"])
+        else:
+            d["dup_count"] = 1
+            d["dup_sites"] = [d["site_name"]]
+            keys[k] = d
+            out.append(d)
+    return out
 
 
 @app.get("/dev-login")
@@ -527,6 +556,7 @@ async def campaigns(request: Request, response: Response):
         sort = "recent"
     fav_only = request.query_params.get("fav") == "1" and not guest
     q = request.query_params.get("q", "").strip().lower()   # 검색어(제목·지역)
+    merge = request.query_params.get("merge", "1") != "0"   # 중복 병합(기본 ON)
 
     def _q_ok(r):
         if not q:
@@ -578,6 +608,8 @@ async def campaigns(request: Request, response: Response):
         # 찜만 보기: 사이드바 필터와 무관하게 '내가 담은 것 전부'(마감 지난 것도 포함).
         matched = [_to_dict(r) for r in db.favorites_rows(uid) if _q_ok(r)]
         _sort(matched)
+        if merge:
+            matched = _collapse(matched)
         new_count = sum(1 for d in matched if d["is_new"])
         page = matched[offset:offset + limit]
         return {"campaigns": page, "new_count": new_count, "total": len(matched),
@@ -586,7 +618,7 @@ async def campaigns(request: Request, response: Response):
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
                       or f["channels"] or any(f.get(k) is not None for k in NUMERIC_FILTERS))
 
-    if not has_filter and not q:
+    if not has_filter and not q and not merge:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
         total = db.count_seen()
         new_count = db.count_seen_new(new_cutoff)
@@ -596,23 +628,31 @@ async def campaigns(request: Request, response: Response):
 
     # 필터 적용 → 활성 캠페인 전체를 훑어 매칭(사이트는 DB 레벨에서 선필터해 양을 줄임).
     # list_recent 의 최신 N건 상한을 쓰면 오래 전 수집된 사이트가 통째로 누락되므로 list_active 사용.
+    # 사이드바 필터(키워드/지역/카테고리/채널/숫자)가 있을 때만 캠페인별 매칭 수행.
+    # 검색·병합만 있고 필터가 없으면 매칭을 건너뛰어(전부 통과) 스캔을 빠르게.
+    need_match = bool(f["keywords"] or f["regions"] or f["categories"] or f["channels"]
+                      or any(f.get(k) is not None for k in NUMERIC_FILTERS))
     matched, new_count = [], 0
     for r in db.list_active(sites=f.get("sites") or None):
         if not _q_ok(r):
             continue
-        c = Campaign(
-            site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
-            url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
-            channel=r["channel"] or "", dday=_live_dday(r), applicants=r["applicants"],
-            recruit=r["recruit"], competition=r["competition"],
-        )
-        if not matches_filter(c, f):
-            continue
+        if need_match:
+            c = Campaign(
+                site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
+                url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
+                channel=r["channel"] or "", dday=_live_dday(r), applicants=r["applicants"],
+                recruit=r["recruit"], competition=r["competition"],
+            )
+            if not matches_filter(c, f):
+                continue
         d = _to_dict(r)
         if d["is_new"]:
             new_count += 1
         matched.append(d)
     _sort(matched)
+    if merge:
+        matched = _collapse(matched)
+        new_count = sum(1 for d in matched if d["is_new"])   # 병합 후 재계산
     page = matched[offset:offset + limit]
     return {"campaigns": page, "new_count": new_count, "total": len(matched),
             "offset": offset, "limit": limit, "has_more": offset + limit < len(matched)}
@@ -905,6 +945,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
         <option value=deadline>마감임박순</option>
         <option value=competition>경쟁률↓</option>
       </select>
+      <button id=mergetgl class="seenbtn on" onclick="toggleMerge()" title="같은 업체 중복(채널변형 등) 묶기">🔁 병합</button>
       <button id=favtgl class=seenbtn onclick="toggleFavOnly()" style="display:none">♡ 찜</button>
       <button class=seenbtn onclick="seenAll()">모두 읽음</button>
     </div></div>
@@ -965,10 +1006,13 @@ function feedParams(){
   p.set('sort',feedSort);
   if(favOnly)p.set('fav','1');
   if(searchQ)p.set('q',searchQ);
+  if(!mergeOn)p.set('merge','0');
   return p;
 }
 let searchQ='';
 function doSearch(){ searchQ=(document.getElementById('searchbox').value||'').trim(); loadCampaigns(true); }
+let mergeOn=true;
+function toggleMerge(){ mergeOn=!mergeOn; document.getElementById('mergetgl').classList.toggle('on',mergeOn); loadCampaigns(true); }
 function changeSort(){ feedSort=document.getElementById('sortsel').value; loadCampaigns(true); }
 function toggleFavOnly(){
   favOnly=!favOnly;
@@ -1011,6 +1055,7 @@ function appendFeed(arr){
     const meta=[c.region,c.category,c.channel].filter(Boolean).join(' \u00b7 ');
     let pills='';
     if(c.site_name) pills+='<span class="pill site">'+esc(c.site_name)+'</span>';
+    if(c.dup_count>1) pills+='<span class="pill" title="묶음: '+(c.dup_sites?esc(c.dup_sites.join(', ')):'')+'">🔁 '+c.dup_count+'</span>';
     if(c.dday!=null) pills+='<span class="pill'+(c.dday<=1?' good':'')+'">'+(c.dday===0?'오늘마감':'D-'+c.dday)+'</span>';
     if(c.applicants!=null||c.recruit!=null) pills+='<span class=pill>\uc2e0\uccad '+(c.applicants!=null?c.applicants:'-')+' / \ubaa8\uc9d1 '+(c.recruit!=null?c.recruit:'-')+'</span>';
     if(c.competition!=null) pills+='<span class="pill'+(c.competition<=1?' good':'')+'">\uacbd\uc7c1\ub960 '+c.competition+'</span>';
