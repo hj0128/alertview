@@ -526,6 +526,12 @@ async def campaigns(request: Request, response: Response):
     if sort not in ("recent", "deadline", "competition"):
         sort = "recent"
     fav_only = request.query_params.get("fav") == "1" and not guest
+    q = request.query_params.get("q", "").strip().lower()   # 검색어(제목·지역)
+
+    def _q_ok(r):
+        if not q:
+            return True
+        return q in ((r["title"] or "") + " " + (r["region"] or "")).lower()
 
     # 최근 48시간 이내 수집 = NEW (달력 하루 리셋 대신 롤링 - 신청 하루 전 올라온 것도 유지)
     new_cutoff = (datetime.datetime.now() - datetime.timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
@@ -570,7 +576,7 @@ async def campaigns(request: Request, response: Response):
 
     if fav_only:
         # 찜만 보기: 사이드바 필터와 무관하게 '내가 담은 것 전부'(마감 지난 것도 포함).
-        matched = [_to_dict(r) for r in db.favorites_rows(uid)]
+        matched = [_to_dict(r) for r in db.favorites_rows(uid) if _q_ok(r)]
         _sort(matched)
         new_count = sum(1 for d in matched if d["is_new"])
         page = matched[offset:offset + limit]
@@ -580,7 +586,7 @@ async def campaigns(request: Request, response: Response):
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
                       or f["channels"] or any(f.get(k) is not None for k in NUMERIC_FILTERS))
 
-    if not has_filter:
+    if not has_filter and not q:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
         total = db.count_seen()
         new_count = db.count_seen_new(new_cutoff)
@@ -592,6 +598,8 @@ async def campaigns(request: Request, response: Response):
     # list_recent 의 최신 N건 상한을 쓰면 오래 전 수집된 사이트가 통째로 누락되므로 list_active 사용.
     matched, new_count = [], 0
     for r in db.list_active(sites=f.get("sites") or None):
+        if not _q_ok(r):
+            continue
         c = Campaign(
             site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
             url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
@@ -900,6 +908,12 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
       <button id=favtgl class=seenbtn onclick="toggleFavOnly()" style="display:none">♡ 찜</button>
       <button class=seenbtn onclick="seenAll()">모두 읽음</button>
     </div></div>
+  <div style="display:flex;gap:8px;margin-top:10px">
+    <input id=searchbox type=search placeholder="🔍 업체명·지역·제목 검색"
+       style="flex:1;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:14px;color:var(--ink)"
+       onkeydown="if(event.key==='Enter')doSearch()" oninput="if(!this.value)doSearch()">
+    <button class=seenbtn onclick="doSearch()">검색</button>
+  </div>
   <button id=newbanner onclick="showNew()" style="display:none"></button>
   <div id=feedwrap><div id=feed></div></div>
 </div>
@@ -950,8 +964,11 @@ function feedParams(){
   }
   p.set('sort',feedSort);
   if(favOnly)p.set('fav','1');
+  if(searchQ)p.set('q',searchQ);
   return p;
 }
+let searchQ='';
+function doSearch(){ searchQ=(document.getElementById('searchbox').value||'').trim(); loadCampaigns(true); }
 function changeSort(){ feedSort=document.getElementById('sortsel').value; loadCampaigns(true); }
 function toggleFavOnly(){
   favOnly=!favOnly;
