@@ -170,6 +170,46 @@ async def api_inquiry(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/map")
+async def api_map(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return {"points": db.active_region_counts()}
+
+
+@app.get("/map", response_class=HTMLResponse)
+async def map_page(request: Request):
+    return HTMLResponse("""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>지역 지도 · 체험단</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>html,body{margin:0;height:100%;font-family:-apple-system,'Malgun Gothic',sans-serif}
+#bar{position:fixed;z-index:1000;top:0;left:0;right:0;height:46px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.1);
+  display:flex;align-items:center;gap:12px;padding:0 14px}
+#bar b{font-size:15px} #bar a{color:#3b6ef6;text-decoration:none;font-size:14px;margin-left:auto}
+#map{position:absolute;top:46px;bottom:0;left:0;right:0}
+.cmark .b{background:#3b6ef6;color:#fff;border-radius:16px;min-width:26px;height:26px;padding:0 6px;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);border:2px solid #fff}</style></head><body>
+<div id=bar><b>🗺 지역별 체험단</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span><a href="/">← 피드로</a></div>
+<div id=map></div>
+<script>
+const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
+fetch('/api/map').then(r=>r.json()).then(d=>{
+  const pts=d.points||[];
+  document.getElementById('hint').textContent=pts.length+'개 지역';
+  pts.forEach(p=>{
+    if(p.lat==null||p.lng==null)return;
+    const sz=Math.min(52,26+Math.round(Math.log2(p.cnt+1))*4);
+    const icon=L.divIcon({className:'cmark',html:'<div class="b" style="min-width:'+sz+'px;height:'+sz+'px">'+p.cnt+'</div>',iconSize:[sz,sz]});
+    const url='/?q='+encodeURIComponent(p.region);
+    L.marker([p.lat,p.lng],{icon}).addTo(map)
+      .bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역 캠페인 보기 →</a>');
+  });
+}).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+</script></body></html>""", headers={"Cache-Control": "no-store"})
+
+
 def verify_telegram_auth(data: dict) -> bool:
     recv = data.get("hash")
     if not recv or not config.BOT_TOKEN:
@@ -848,7 +888,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  #loginbar p{color:#e7eefc;font-size:13px;margin:0 0 13px;line-height:1.5}
  #loginbar .wrap{display:flex;justify-content:center;min-height:40px}
 </style></head><body><main>
-<header><h1>🔔 체험단 알림</h1><span style="display:flex;gap:14px;align-items:center"><a class=logout href="/inquiry">💬 문의</a><a class=logout href="/logout" id=logoutlink style="display:none">로그아웃</a></span></header>
+<header><h1>🔔 체험단 알림</h1><span style="display:flex;gap:14px;align-items:center"><a class=logout href="/map">🗺 지도</a><a class=logout href="/inquiry">💬 문의</a><a class=logout href="/logout" id=logoutlink style="display:none">로그아웃</a></span></header>
 <p class=sub id=hello></p>
 
 <div id=loginbar style="display:none">
@@ -980,6 +1020,7 @@ async function load(){
   const u=new URLSearchParams(location.search);          // URL 로 정렬·찜 지정 가능(공유/북마크)
   if(['recent','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
   favOnly=(u.get('fav')==='1') && !guest;
+  const uq=u.get('q'); if(uq){ searchQ=uq; const sb=document.getElementById('searchbox'); if(sb) sb.value=uq; }  // 지도→지역검색 진입
   document.getElementById('sortsel').value=feedSort;     // 드롭다운에 현재 정렬 반영
   const fb=document.getElementById('favtgl');
   fb.classList.toggle('on',favOnly); fb.textContent=favOnly?'♥ 찜만':'♡ 찜';

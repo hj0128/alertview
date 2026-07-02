@@ -153,6 +153,11 @@ def _create_schema() -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS geo_cache (
+            region TEXT PRIMARY KEY, lat REAL, lng REAL
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY, value TEXT
         )
@@ -770,6 +775,37 @@ def delete_campaigns(site: str, cids) -> int:
             _c().execute(_q("DELETE FROM seen WHERE site=? AND cid=?"), (site, cid))
         _c().commit()
     return len(cids)
+
+
+def geo_set(region: str, lat: float, lng: float) -> None:
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO geo_cache(region,lat,lng) VALUES(?,?,?) "
+            "ON CONFLICT(region) DO UPDATE SET lat=excluded.lat,lng=excluded.lng"),
+            (region, lat, lng))
+        _c().commit()
+
+
+def active_region_counts() -> list:
+    """활성 캠페인의 지역별 개수 + 좌표(geo_cache 있는 것만)."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT s.region AS region, count(*) AS cnt, g.lat AS lat, g.lng AS lng "
+            "FROM seen s JOIN geo_cache g ON g.region=s.region "
+            f"WHERE s.region<>'' AND ({_ACTIVE}) "
+            "GROUP BY s.region, g.lat, g.lng ORDER BY cnt DESC"), (_today(),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def regions_missing_geo(limit: int = 60) -> list:
+    """활성 캠페인 지역 중 좌표 캐시가 아직 없는 것."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT DISTINCT s.region AS region FROM seen s "
+            f"WHERE s.region<>'' AND ({_ACTIVE}) "
+            "AND s.region NOT IN (SELECT region FROM geo_cache) LIMIT ?"),
+            (_today(), limit)).fetchall()
+    return [r["region"] for r in rows]
 
 
 def count_seen_new(cutoff: str) -> int:

@@ -205,6 +205,42 @@ async def _kakao_backfill() -> None:
         log.info("[kakao] 지역 보정 %d건 적용", filled)
 
 
+async def _geo_backfill(limit: int = 60) -> None:
+    """활성 지역(시/구)을 카카오로 좌표 변환해 geo_cache 채움(지도용). 매 주기 일부씩."""
+    key = config.KAKAO_REST_API_KEY
+    if not key:
+        return
+    missing = db.regions_missing_geo(limit)
+    if not missing:
+        return
+    headers = {"Authorization": f"KakaoAK {key}"}
+    filled = 0
+    async with httpx.AsyncClient(trust_env=False, timeout=15.0) as client:
+        for region in missing:
+            coord = None
+            try:
+                for path in ("address", "keyword"):
+                    r = await client.get(
+                        f"https://dapi.kakao.com/v2/local/search/{path}.json",
+                        params={"query": region, "size": 1}, headers=headers)
+                    if r.status_code in (401, 403):
+                        log.warning("[geo] 카카오 인증 거부(HTTP %s) → 중단", r.status_code)
+                        return
+                    if r.status_code == 200:
+                        docs = r.json().get("documents") or []
+                        if docs and docs[0].get("x") and docs[0].get("y"):
+                            coord = (float(docs[0]["y"]), float(docs[0]["x"]))
+                            break
+                if coord:
+                    db.geo_set(region, coord[0], coord[1])
+                    filled += 1
+            except Exception as e:
+                log.warning("[geo] '%s' 좌표 변환 실패: %s", region, e)
+                continue
+    if filled:
+        log.info("[geo] 지역 좌표 %d개 캐시", filled)
+
+
 async def run_poll(bot, demo: bool) -> None:
     new_items = await collect_new(demo)
     if config.PURGE_GRACE_DAYS > 0:
@@ -217,6 +253,7 @@ async def run_poll(bot, demo: bool) -> None:
     await _check_mrblog_cookie(bot, demo)
     await _check_adapter_health(bot)
     await _kakao_backfill()
+    await _geo_backfill()
     if new_items:
         sent = await notify_new(bot, new_items)
         log.info("신규 %d건 → 메시지 %d건 발송", len(new_items), sent)
