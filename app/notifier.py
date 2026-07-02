@@ -117,6 +117,63 @@ async def flush_pending(bot: Bot) -> int:
     return sent
 
 
+def _live_dday(r: dict):
+    dl = r.get("deadline")
+    if dl:
+        try:
+            d = (datetime.date.fromisoformat(dl) - datetime.date.today()).days
+            return d if d >= 0 else None
+        except (ValueError, TypeError):
+            pass
+    return r.get("dday")
+
+
+def _format_reco(rows: list) -> str:
+    out = ["🎯 <b>오늘의 추천</b> · 당첨 확률 높은 체험단 (경쟁률 낮은 순)", ""]
+    for i, r in enumerate(rows, 1):
+        bits = [f"🔥 경쟁률 {r['competition']}"]
+        if r.get("applicants") is not None and r.get("recruit") is not None:
+            bits.append(f"👥 {r['applicants']}/{r['recruit']}")
+        dd = _live_dday(r)
+        if dd is not None:
+            bits.append(f"⏰ D-{dd}")
+        out.append(f"{i}. {(r.get('title') or '').strip()}")
+        out.append("   " + " · ".join(bits))
+        out.append(f"   🔗 {r.get('url') or ''}")
+    return "\n".join(out)
+
+
+async def recommend_low_competition(bot: Bot, max_per_user: int = 5, threshold: float = 1.0) -> int:
+    """매일 1회(방해금지 종료 후), 사용자 필터에 맞는 경쟁률 낮은(당첨확률 높은) 캠페인 추천."""
+    if not bot or _in_quiet_hours():
+        return 0
+    today = datetime.date.today().isoformat()
+    if db.meta_get("recommend_date") == today:      # 오늘 이미 발송
+        return 0
+    sent = 0
+    for chat_id in db.active_users():
+        f = db.get_all_filters(chat_id)
+        cands = []
+        for r in db.list_active(sites=f.get("sites") or None):
+            comp = r["competition"]
+            if comp is None or comp > threshold:     # 경쟁률 미상/높음 제외
+                continue
+            c = Campaign(
+                site=r["site"], site_name="", cid=r["cid"], title=r["title"] or "",
+                url=r["url"] or "", region=r["region"] or "", category=r["category"] or "",
+                channel=r["channel"] or "", dday=_live_dday(r), applicants=r["applicants"],
+                recruit=r["recruit"], competition=comp)
+            if matches_filter(c, f):
+                cands.append(dict(r))
+        if not cands:
+            continue
+        cands.sort(key=lambda x: (x["competition"], _live_dday(x) if _live_dday(x) is not None else 999))
+        if await _send(bot, chat_id, _format_reco(cands[:max_per_user])):
+            sent += 1
+    db.meta_set("recommend_date", today)             # 대상이 없어도 오늘은 시도 완료로 표시(하루 1회)
+    return sent
+
+
 async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
     if not campaigns:
         return 0

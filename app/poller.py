@@ -10,7 +10,7 @@ import httpx
 from . import db, config
 from .adapters import active_adapters
 from .adapters.base import Campaign
-from .notifier import notify_new, remind_deadlines, flush_pending
+from .notifier import notify_new, remind_deadlines, flush_pending, recommend_low_competition
 from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
@@ -226,3 +226,6 @@ async def run_poll(bot, demo: bool) -> None:
     flushed = await flush_pending(bot)          # 방해금지 끝나면 대기열 알림 발송
     if flushed:
         log.info("보류 알림 %d건 발송(방해금지 종료)", flushed)
+    reco = await recommend_low_competition(bot)  # 매일 1회 경쟁률 낮은 추천
+    if reco:
+        log.info("경쟁률 낮은 추천 %d명 발송", reco)
