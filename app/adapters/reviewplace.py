@@ -169,13 +169,21 @@ class ReviewPlaceAdapter(BaseAdapter):
                     body["ct1"] = ct1
                 if ct2:
                     body["ct2"] = ct2
-                try:
-                    resp = await client.post(AJAX, data=body, headers=headers, timeout=20.0)
-                    resp.raise_for_status()
-                    html = resp.text
-                except Exception as e:
-                    log.warning("[reviewplace] %s start=%d 요청 실패(중단): %s", typ, start, e)
-                    raise
+                html = None
+                for attempt in range(2):           # 1회 재시도(일시적 타임아웃 흡수)
+                    try:
+                        resp = await client.post(AJAX, data=body, headers=headers, timeout=20.0)
+                        resp.raise_for_status()
+                        html = resp.text
+                        break
+                    except Exception as e:
+                        if attempt == 0:
+                            await asyncio.sleep(1.0)
+                            continue
+                        # 재시도도 실패 → 이 카테고리만 건너뛰고 나머지는 계속(전체 중단 X)
+                        log.warning("[reviewplace] %s start=%d 요청 실패(이 카테고리 건너뜀): %s", typ, start, e)
+                if html is None:
+                    break
                 page_new = [c for c in _parse(html, cat) if c.cid not in seen]
                 for c in page_new:
                     seen.add(c.cid)

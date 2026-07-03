@@ -1267,6 +1267,7 @@ async function clearFilter(type,key){   // 특정 필터 전체 해제(체험단
   await post('/api/clear',{type});await load();
 }
 async function clearAll(){               // 완전 전체 해제(모든 조건)
+  searchQ=''; {const sb=document.getElementById('searchbox'); if(sb) sb.value='';}   // 검색어도 초기화
   S.sites=[];S.keywords=[];S.regions=[];S.categories=[];S.channels=[];
   NUMF.forEach(([sk])=>S[sk]=null);curSido=null;
   if(guest){refreshLocal();return;}
@@ -1305,6 +1306,7 @@ async function savePreset(){
   await post('/api/preset/save',{name,payload}); await load();
 }
 async function applyPreset(name,payload){
+  searchQ=''; {const sb=document.getElementById('searchbox'); if(sb) sb.value='';}   // 프리셋 적용 시 검색어 초기화
   S.sites=payload.sites||[];S.keywords=payload.keywords||[];S.regions=payload.regions||[];
   S.categories=payload.categories||[];S.channels=payload.channels||[];
   NUMF.forEach(([sk])=>S[sk]=(payload[sk]??null));curSido=null;

@@ -9,3 +9,5 @@ __pycache__/
 
 # 미블 네이버 세션 프로필(민감 - 절대 커밋 금지)
 tools/.mrblog_profile/
+
+tools/mrblog_refresh.log
