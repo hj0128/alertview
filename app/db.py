@@ -182,7 +182,7 @@ def _create_schema() -> None:
         f"""
         CREATE TABLE IF NOT EXISTS pending_notify (
             {"id BIGSERIAL PRIMARY KEY" if _is_pg() else "id INTEGER PRIMARY KEY AUTOINCREMENT"},
-            chat_id {int_pk}, text TEXT, ts TEXT
+            chat_id {int_pk}, text TEXT, ts TEXT, kind TEXT DEFAULT 'new'
         )
         """,
     ]
@@ -201,6 +201,7 @@ def _migrate() -> None:
         ("seen", "image", "image TEXT"),
         ("seen", "deadline", "deadline TEXT"),   # 마감 절대 날짜(YYYY-MM-DD) → D-day 동적 계산용
         ("seen", "region_raw", "region_raw TEXT"),  # 사이트 원본 지역 표기(정규화 전)
+        ("pending_notify", "kind", "kind TEXT DEFAULT 'new'"),  # 밤새 대기: new(요약)/reminder(개별)
     ]
     if _is_pg():
         for table, _col, decl in add:
@@ -589,18 +590,18 @@ def mark_reminded(chat_id, site: str, cid: str) -> None:
         _c().commit()
 
 
-def enqueue_notify(chat_id, text: str) -> None:
-    """방해금지 시간대에 보류할 알림을 대기열에 저장."""
+def enqueue_notify(chat_id, text: str, kind: str = "new") -> None:
+    """방해금지 시간대에 보류할 알림을 대기열에 저장. kind: new(아침 요약)/reminder(개별 발송)."""
     with _lock:
-        _c().execute(_q("INSERT INTO pending_notify(chat_id,text,ts) VALUES(?,?,?)"),
-                     (chat_id, text, _now()))
+        _c().execute(_q("INSERT INTO pending_notify(chat_id,text,ts,kind) VALUES(?,?,?,?)"),
+                     (chat_id, text, _now(), kind))
         _c().commit()
 
 
-def list_pending(limit: int = 500) -> list:
+def list_pending(limit: int = 2000) -> list:
     with _lock:
         rows = _c().execute(_q(
-            "SELECT id,chat_id,text FROM pending_notify ORDER BY id LIMIT ?"), (limit,)).fetchall()
+            "SELECT id,chat_id,text,kind FROM pending_notify ORDER BY id LIMIT ?"), (limit,)).fetchall()
     return [dict(r) for r in rows]
 
 

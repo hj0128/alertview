@@ -76,8 +76,8 @@ async def remind_deadlines(bot: Bot) -> int:
             if db.is_reminded(chat_id, r["site"], r["cid"]):
                 continue
             text = _format_reminder(r, dleft)
-            if quiet:                                    # 밤엔 대기열 + 처리표시(중복 방지)
-                db.enqueue_notify(chat_id, text)
+            if quiet:                                    # 밤엔 대기열(개별) + 처리표시(중복 방지)
+                db.enqueue_notify(chat_id, text, kind="reminder")
                 db.mark_reminded(chat_id, r["site"], r["cid"])
             elif await _send(bot, chat_id, text):
                 db.mark_reminded(chat_id, r["site"], r["cid"])
@@ -106,18 +106,33 @@ async def _send(bot: Bot, chat_id, text: str) -> bool:
 
 
 async def flush_pending(bot: Bot) -> int:
-    """방해금지 시간이 아니면 대기열 알림 발송. 단, 알림 끈 사용자(active=0)에겐 보내지 않고 큐에서 제거."""
+    """방해금지 종료 후 대기열 발송: 신규는 사용자당 '요약 1건', 리마인더는 개별.
+    알림 끈 사용자(active=0)에겐 보내지 않고 큐에서 제거."""
     if not bot or _in_quiet_hours():
         return 0
     active = set(db.active_users())
+    news: dict = {}      # chat_id -> [(id, line)]  (신규 요약용)
     sent = 0
     for row in db.list_pending():
-        if row["chat_id"] not in active:
-            db.delete_pending(row["id"])       # 알림 끈 사용자 → 발송 안 함
+        cid = row["chat_id"]
+        if cid not in active:
+            db.delete_pending(row["id"])            # 알림 끈 사용자 → 발송 안 함
             continue
-        if await _send(bot, row["chat_id"], row["text"]):
+        if row.get("kind") == "reminder":
+            await _send(bot, cid, row["text"])      # 리마인더는 개별(중요·소수)
             db.delete_pending(row["id"])
             sent += 1
+        else:
+            news.setdefault(cid, []).append((row["id"], row["text"]))
+    for cid, items in news.items():                 # 밤새 신규 → 사용자당 요약 1건
+        n = len(items)
+        digest = f"🌙 <b>밤새 새 체험단 {n}건</b>\n\n" + "\n".join(t for _, t in items[:5])
+        if n > 5:
+            digest += f"\n\n… 외 {n - 5}건. 전체는 피드에서 확인하세요."
+        if await _send(bot, cid, digest):
+            sent += 1
+        for pid, _ in items:
+            db.delete_pending(pid)
     return sent
 
 
@@ -216,9 +231,10 @@ async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
         f = db.get_all_filters(chat_id)
         for c in campaigns:
             if matches_filter(c, f):
-                text = format_campaign(c)
                 if quiet:
-                    db.enqueue_notify(chat_id, text)     # 밤엔 대기열 → 아침에 발송
-                elif await _send(bot, chat_id, text):
+                    # 밤엔 개별 발송 대신 요약용 한 줄로 저장 → 아침에 1건으로 묶어 발송
+                    line = "· " + (c.title or "").strip() + (f"\n  🔗 {c.url}" if c.url else "")
+                    db.enqueue_notify(chat_id, line, kind="new")
+                elif await _send(bot, chat_id, format_campaign(c)):
                     sent += 1
     return sent
