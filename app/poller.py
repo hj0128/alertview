@@ -246,6 +246,9 @@ async def _geo_backfill(limit: int = 60) -> None:
 _BRK = re.compile(r"\[[^\]]*\]")     # 제목의 [지역]·[채널]·[카테고리] 태그
 
 
+_SUFFIX = re.compile(r"\s*(본점|직영점|지점|점)$")   # '토토스시 동성로 본점' → '토토스시 동성로'
+
+
 def _venue_name(title: str) -> str:
     """제목에서 대괄호 태그를 걷어낸 업체명(지오코딩 질의용). 과도한 설명 방지로 길이 제한."""
     t = _BRK.sub(" ", title or "")
@@ -253,8 +256,51 @@ def _venue_name(title: str) -> str:
     return t[:30]
 
 
+def _venue_queries(title: str) -> list:
+    """느슨한 순서의 후보 질의: 전체 → 본점/점 접미사 제거 → 앞 2어절.
+    지역어는 붙이지 않고(질의 과협소 방지) 결과는 시/도로 검증한다."""
+    v = _venue_name(title)
+    out: list = []
+
+    def add(x):
+        x = (x or "").strip()
+        if x and x not in out:
+            out.append(x)
+
+    add(v)
+    add(_SUFFIX.sub("", v))
+    w = v.split()
+    if len(w) >= 2:
+        add(" ".join(w[:2]))
+    return out[:3]
+
+
+async def _geocode_campaign(client, headers, title: str, region: str):
+    """여러 후보 질의로 카카오 키워드 검색 → 시/도 일치하는 첫 결과.
+    반환: (lat,lng,place,addr) | 'AUTH'(인증거부) | 'ERR'(일시오류). 미매칭이면 (None,None,'','')."""
+    sido = region.split()[0] if region else ""
+    for query in _venue_queries(title):
+        try:
+            resp = await client.get(
+                "https://dapi.kakao.com/v2/local/search/keyword.json",
+                params={"query": query, "size": 5}, headers=headers)
+        except Exception:
+            return "ERR"
+        if resp.status_code in (401, 403):
+            return "AUTH"
+        if resp.status_code != 200:
+            continue
+        for d in (resp.json().get("documents") or []):
+            a = d.get("road_address_name") or d.get("address_name") or ""
+            # 같은 이름 타 지역 매장 오매칭 방지: 결과 주소가 해당 시/도로 시작할 때만 채택
+            if d.get("x") and d.get("y") and (not sido or a.startswith(sido)):
+                return (float(d["y"]), float(d["x"]), d.get("place_name") or "", a)
+        await asyncio.sleep(0.05)
+    return (None, None, "", "")
+
+
 async def _place_backfill(limit: int = 40) -> None:
-    """활성 방문형 캠페인의 '업체명 + 지역'을 카카오 키워드 검색해 실제 좌표를 저장(매 주기 일부씩).
+    """활성 방문형 캠페인의 업체명을 카카오 키워드 검색해 실제 좌표를 저장(매 주기 일부씩).
     성공/미스 모두 place_geo 에 기록 → 미스는 재조회하지 않음(일시 오류만 다음 주기 재시도)."""
     key = config.KAKAO_REST_API_KEY
     if not key:
@@ -266,32 +312,16 @@ async def _place_backfill(limit: int = 40) -> None:
     hit = 0
     async with httpx.AsyncClient(trust_env=False, timeout=15.0) as client:
         for r in rows:
-            venue = _venue_name(r["title"])
-            region = r["region"] or ""
-            sido = region.split()[0] if region else ""
-            if not venue:
+            if not _venue_name(r["title"]):
                 db.place_geo_set(r["site"], r["cid"], None, None)   # 업체명 없음 → 재조회 방지
                 continue
-            lat = lng = None
-            place = addr = ""
-            try:
-                resp = await client.get(
-                    "https://dapi.kakao.com/v2/local/search/keyword.json",
-                    params={"query": f"{venue} {region}".strip(), "size": 5}, headers=headers)
-                if resp.status_code in (401, 403):
-                    log.warning("[place] 카카오 인증 거부(HTTP %s) → 이번 주기 중단", resp.status_code)
-                    return
-                if resp.status_code == 200:
-                    for d in (resp.json().get("documents") or []):
-                        a = d.get("road_address_name") or d.get("address_name") or ""
-                        # 같은 이름의 타 지역 매장 오매칭 방지: 결과 주소가 해당 시/도로 시작할 때만 채택
-                        if d.get("x") and d.get("y") and (not sido or a.startswith(sido)):
-                            lat, lng = float(d["y"]), float(d["x"])
-                            place, addr = d.get("place_name") or "", a
-                            break
-            except Exception as e:
-                log.warning("[place] '%s' 좌표 실패: %s", venue, e)
+            res = await _geocode_campaign(client, headers, r["title"], r["region"] or "")
+            if res == "AUTH":
+                log.warning("[place] 카카오 인증 거부 → 이번 주기 중단")
+                return
+            if res == "ERR":
                 continue                       # 일시 오류 → 캐시 안 함(다음 주기 재시도)
+            lat, lng, place, addr = res
             db.place_geo_set(r["site"], r["cid"], lat, lng, place, addr)   # 성공/미스 모두 기록
             if lat is not None:
                 hit += 1

@@ -6,37 +6,23 @@ import asyncio
 import httpx
 
 from app import db, config
-from app.poller import _venue_name
+from app.poller import _venue_name, _geocode_campaign
 
 CONC = 8            # 동시 요청 수(카카오 rate limit 여유)
 BATCH = 100000      # 남은 대상 전부
 
 
 async def _one(client, sem, headers, r):
-    venue = _venue_name(r["title"])
-    region = r["region"] or ""
-    sido = region.split()[0] if region else ""
-    if not venue:
+    if not _venue_name(r["title"]):
         db.place_geo_set(r["site"], r["cid"], None, None)
         return 0
     async with sem:
-        try:
-            resp = await client.get(
-                "https://dapi.kakao.com/v2/local/search/keyword.json",
-                params={"query": f"{venue} {region}".strip(), "size": 5}, headers=headers)
-        except Exception:
-            return 0                       # 일시 오류 → 캐시 안 함(다음에 재시도)
-    lat = lng = None
-    place = addr = ""
-    if resp.status_code in (401, 403):
-        print("카카오 인증 거부", resp.status_code); return -1
-    if resp.status_code == 200:
-        for d in (resp.json().get("documents") or []):
-            a = d.get("road_address_name") or d.get("address_name") or ""
-            if d.get("x") and d.get("y") and (not sido or a.startswith(sido)):
-                lat, lng = float(d["y"]), float(d["x"])
-                place, addr = d.get("place_name") or "", a
-                break
+        res = await _geocode_campaign(client, headers, r["title"], r["region"] or "")
+    if res == "AUTH":
+        print("카카오 인증 거부"); return -1
+    if res == "ERR":
+        return 0                       # 일시 오류 → 캐시 안 함(다음에 재시도)
+    lat, lng, place, addr = res
     db.place_geo_set(r["site"], r["cid"], lat, lng, place, addr)
     return 1 if lat is not None else 0
 
