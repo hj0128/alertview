@@ -173,7 +173,25 @@ async def api_inquiry(request: Request):
 @app.get("/api/map")
 async def api_map(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    return {"points": db.active_region_counts()}
+    today = datetime.date.today()
+    out = []
+    for p in db.active_place_points():
+        dl = p.get("deadline")
+        dday = None
+        if dl:
+            try:
+                d = (datetime.date.fromisoformat(dl) - today).days
+                dday = d if d >= 0 else None
+            except ValueError:
+                pass
+        out.append({
+            "lat": p["lat"], "lng": p["lng"], "title": p["title"] or "",
+            "url": p["url"] or "", "region": p["region"] or "",
+            "category": category_of(p["category"], p["title"] or ""),
+            "place": p["place"] or "", "dday": dday,
+            "site": _SITE_NAMES.get(p["site"], p["site"]),
+        })
+    return {"points": out}
 
 
 @app.get("/map", response_class=HTMLResponse)
@@ -194,28 +212,35 @@ async def map_page(request: Request):
   display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
   box-shadow:0 2px 6px rgba(0,0,0,.3);border:2px solid #fff}
 .cmark .b.clus{background:#e59409}</style></head><body>
-<div id=bar><b>🗺 지역별 체험단</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span><a href="/">← 피드로</a></div>
+<div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span><a href="/">← 피드로</a></div>
 <div id=map></div>
 <script>
 const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);
-function bubble(n,cls){const sz=Math.min(58,26+Math.round(Math.log2(n+1))*3.5);
-  return L.divIcon({className:'cmark',html:'<div class="b '+cls+'" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function dot(cat){const col=CATC[cat]||'#3b6ef6';
+  return L.divIcon({className:'cmark',iconSize:[16,16],iconAnchor:[8,8],
+    html:'<div style="width:14px;height:14px;border-radius:50%;background:'+col+';border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>'});}
+function bubble(n){const sz=Math.min(56,24+Math.round(Math.log2(n+1))*3.5);
+  return L.divIcon({className:'cmark',html:'<div class="b clus" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
 const cluster=L.markerClusterGroup({
-  showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:48,
-  iconCreateFunction:function(c){                       // 클러스터 버블 = 자식들의 캠페인 수 '합계'
-    let sum=0; c.getAllChildMarkers().forEach(m=>{sum+=(m.options.cnt||0);});
-    return bubble(sum,'clus');
-  }
+  showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:44,
+  iconCreateFunction:c=>bubble(c.getChildCount())      // 클러스터 = 그 안의 캠페인 수
 });
 fetch('/api/map').then(r=>r.json()).then(d=>{
   const pts=d.points||[];
-  document.getElementById('hint').textContent=pts.length+'개 지역';
+  document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
   pts.forEach(p=>{
     if(p.lat==null||p.lng==null)return;
-    const url='/?only='+encodeURIComponent(p.region);   // 필터 초기화 후 이 지역만
-    const m=L.marker([p.lat,p.lng],{icon:bubble(p.cnt,''),cnt:p.cnt});
-    m.bindPopup('<b>'+p.region+'</b><br>'+p.cnt+'개 캠페인<br><a href="'+url+'">이 지역만 보기 →</a>');
+    const dd=(p.dday==null)?'':(p.dday===0?'오늘마감':'D-'+p.dday);
+    const html='<b>'+esc(p.title)+'</b><br>'
+      +'<span style="color:#666">'+(p.place?esc(p.place)+' · ':'')+esc(p.region)+'</span>'
+      +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
+      +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
+      +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a>';
+    const m=L.marker([p.lat,p.lng],{icon:dot(p.category)});
+    m.bindPopup(html);
     cluster.addLayer(m);
   });
   map.addLayer(cluster);

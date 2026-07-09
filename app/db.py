@@ -158,6 +158,14 @@ def _create_schema() -> None:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS place_geo (
+            site TEXT, cid TEXT,
+            lat REAL, lng REAL,
+            place TEXT, addr TEXT, ts TEXT,
+            PRIMARY KEY (site, cid)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY, value TEXT
         )
@@ -809,6 +817,50 @@ def regions_missing_geo(limit: int = 60) -> list:
             "AND s.region NOT IN (SELECT region FROM geo_cache) LIMIT ?"),
             (_today(), limit)).fetchall()
     return [r["region"] for r in rows]
+
+
+# --- 캠페인별 정밀 좌표(place_geo): 업체명 지오코딩용 ---
+# 지도에 실제 위치로 찍을 방문형 카테고리(오프라인 매장 존재).
+_PLACE_CATS = ("맛집", "여가", "뷰티")
+
+
+def place_geo_set(site: str, cid: str, lat, lng, place: str = "", addr: str = "") -> None:
+    """캠페인 좌표 저장. lat/lng 이 None 이면 '조회했으나 결과 없음'으로 기록(재조회 방지)."""
+    with _lock:
+        _c().execute(_q(
+            "INSERT INTO place_geo(site,cid,lat,lng,place,addr,ts) VALUES(?,?,?,?,?,?,?) "
+            "ON CONFLICT(site,cid) DO UPDATE SET lat=excluded.lat,lng=excluded.lng,"
+            "place=excluded.place,addr=excluded.addr,ts=excluded.ts"),
+            (site, cid, lat, lng, place, addr, _now()))
+        _c().commit()
+
+
+def places_missing_geo(limit: int = 40) -> list:
+    """정밀 좌표가 아직 없는 활성 방문형 캠페인(제목·지역으로 지오코딩 대상)."""
+    cats = ",".join("?" for _ in _PLACE_CATS)
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT s.site, s.cid, s.title, s.region, s.region_raw FROM seen s "
+            f"WHERE s.category IN ({cats}) AND s.region<>'' AND s.region<>'전국' "
+            f"AND ({_ACTIVE}) "
+            "AND NOT EXISTS (SELECT 1 FROM place_geo p WHERE p.site=s.site AND p.cid=s.cid) "
+            "LIMIT ?"),
+            (*_PLACE_CATS, _today(), limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def active_place_points(limit: int = 6000) -> list:
+    """지도용: 정밀 좌표가 있는 활성 캠페인들(최신 수집순)."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT s.site AS site, s.cid AS cid, s.title AS title, s.url AS url, "
+            "s.region AS region, s.category AS category, s.deadline AS deadline, "
+            "p.lat AS lat, p.lng AS lng, p.place AS place "
+            "FROM seen s JOIN place_geo p ON p.site=s.site AND p.cid=s.cid "
+            f"WHERE p.lat IS NOT NULL AND ({_ACTIVE}) "
+            f"ORDER BY s.first_seen DESC, {_tiebreak()} DESC LIMIT ?"),
+            (_today(), limit)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def count_seen_new(cutoff: str) -> int:

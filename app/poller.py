@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import re
 import time
 from typing import List
 
@@ -242,6 +243,63 @@ async def _geo_backfill(limit: int = 60) -> None:
         log.info("[geo] 지역 좌표 %d개 캐시", filled)
 
 
+_BRK = re.compile(r"\[[^\]]*\]")     # 제목의 [지역]·[채널]·[카테고리] 태그
+
+
+def _venue_name(title: str) -> str:
+    """제목에서 대괄호 태그를 걷어낸 업체명(지오코딩 질의용). 과도한 설명 방지로 길이 제한."""
+    t = _BRK.sub(" ", title or "")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:30]
+
+
+async def _place_backfill(limit: int = 40) -> None:
+    """활성 방문형 캠페인의 '업체명 + 지역'을 카카오 키워드 검색해 실제 좌표를 저장(매 주기 일부씩).
+    성공/미스 모두 place_geo 에 기록 → 미스는 재조회하지 않음(일시 오류만 다음 주기 재시도)."""
+    key = config.KAKAO_REST_API_KEY
+    if not key:
+        return
+    rows = db.places_missing_geo(limit)
+    if not rows:
+        return
+    headers = {"Authorization": f"KakaoAK {key}"}
+    hit = 0
+    async with httpx.AsyncClient(trust_env=False, timeout=15.0) as client:
+        for r in rows:
+            venue = _venue_name(r["title"])
+            region = r["region"] or ""
+            sido = region.split()[0] if region else ""
+            if not venue:
+                db.place_geo_set(r["site"], r["cid"], None, None)   # 업체명 없음 → 재조회 방지
+                continue
+            lat = lng = None
+            place = addr = ""
+            try:
+                resp = await client.get(
+                    "https://dapi.kakao.com/v2/local/search/keyword.json",
+                    params={"query": f"{venue} {region}".strip(), "size": 5}, headers=headers)
+                if resp.status_code in (401, 403):
+                    log.warning("[place] 카카오 인증 거부(HTTP %s) → 이번 주기 중단", resp.status_code)
+                    return
+                if resp.status_code == 200:
+                    for d in (resp.json().get("documents") or []):
+                        a = d.get("road_address_name") or d.get("address_name") or ""
+                        # 같은 이름의 타 지역 매장 오매칭 방지: 결과 주소가 해당 시/도로 시작할 때만 채택
+                        if d.get("x") and d.get("y") and (not sido or a.startswith(sido)):
+                            lat, lng = float(d["y"]), float(d["x"])
+                            place, addr = d.get("place_name") or "", a
+                            break
+            except Exception as e:
+                log.warning("[place] '%s' 좌표 실패: %s", venue, e)
+                continue                       # 일시 오류 → 캐시 안 함(다음 주기 재시도)
+            db.place_geo_set(r["site"], r["cid"], lat, lng, place, addr)   # 성공/미스 모두 기록
+            if lat is not None:
+                hit += 1
+            await asyncio.sleep(0.1)
+    if hit:
+        log.info("[place] 캠페인 좌표 %d건 저장", hit)
+
+
 async def run_poll(bot, demo: bool) -> None:
     new_items = await collect_new(demo)
     if config.PURGE_GRACE_DAYS > 0:
@@ -255,6 +313,7 @@ async def run_poll(bot, demo: bool) -> None:
     await _check_adapter_health(bot)
     await _kakao_backfill()
     await _geo_backfill()
+    await _place_backfill(limit=80)
     if new_items:
         sent = await notify_new(bot, new_items)
         log.info("신규 %d건 → 메시지 %d건 발송", len(new_items), sent)
