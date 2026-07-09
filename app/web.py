@@ -242,7 +242,7 @@ _MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   box-shadow:0 2px 8px rgba(0,0,0,.35);border:3px solid #fff}
 .cmark .b.clus{background:#f06418}</style></head><body>
 <div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span>
-<span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#f08c00"></i>포장</span></span>
+<span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#f08c00"></i>포장</span><span class=legchip data-cat="기타"><i style="background:#868e96"></i>기타</span></span>
 __MINE_BTN__<a href="/">← 피드로</a></div>
 <div id=map></div>
 """
