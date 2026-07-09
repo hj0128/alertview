@@ -92,6 +92,9 @@ class ReviewNoteAdapter(BaseAdapter):
     key = "reviewnote"
     name = "리뷰노트"
     enabled = True
+    # 리뷰노트는 마감(조기마감 포함)되면 목록 API 에서 빠진다. 주기적 전체목록 대조로 정리
+    # (poller._prune_reviewnote). 평소 증분 수집의 부분 정리는 비율 가드로 자동 보류된다.
+    prunable = True
 
     async def fetch(self, client: httpx.AsyncClient, on_page=None) -> List[Campaign]:
         out, seen = [], set()

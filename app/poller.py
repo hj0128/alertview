@@ -10,7 +10,7 @@ import httpx
 
 from . import db, config
 from .adapters import active_adapters
-from .adapters.base import Campaign
+from .adapters.base import Campaign, UA
 from .notifier import (notify_new, remind_deadlines, flush_pending,
                        recommend_low_competition, send_daily_visit_report)
 from .region_norm import normalize_offline
@@ -357,6 +357,50 @@ async def _place_backfill(limit: int = 40) -> None:
         log.info("[place] 캠페인 좌표 %d건 저장", hit)
 
 
+async def _prune_reviewnote(interval: int = 10800) -> None:
+    """리뷰노트 전체 모집목록(open)을 주기적으로(기본 3h) 크롤해, 목록에서 빠진 캠페인을 삭제.
+    리뷰노트는 마감(신청 다 차서 '조기마감' 포함)되면 목록 API 에서 사라지므로, 마감일이 아직
+    안 지났어도 이 대조로 정리된다. 크롤이 완전히 끝났을 때만(부분실패 시 보류) 삭제 수행."""
+    from .adapters.reviewnote import ReviewNoteAdapter, API, BASE
+    last = db.meta_get("prune_full:reviewnote")
+    if last:
+        try:
+            if time.time() - float(last) < interval:
+                return
+        except ValueError:
+            pass
+    headers = {"User-Agent": UA, "Accept": "application/json",
+               "Referer": BASE + "/campaigns", "Origin": BASE}
+    live: set = set()
+    complete = False
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=20.0) as client:
+            for page in range(0, 2000):
+                r = await client.get(API.format(page=page), headers=headers)
+                r.raise_for_status()
+                d = r.json().get("data") if isinstance(r.json().get("data"), dict) else r.json()
+                objs = d.get("objects") or []
+                if not objs:
+                    complete = True
+                    break
+                for o in objs:
+                    cid = str(o.get("id") or "").strip()
+                    if cid:
+                        live.add(cid)
+                if not d.get("has_more"):
+                    complete = True
+                    break
+                await asyncio.sleep(0.2)
+    except Exception as e:
+        log.warning("[reviewnote] 전체목록 크롤 실패(정리 보류): %s", e)
+        return
+    if not complete:
+        log.warning("[reviewnote] 전체목록 크롤 미완료(정리 보류)")
+        return
+    _prune_unseen(ReviewNoteAdapter(), live)      # 비율 가드로 오삭제 방지
+    db.meta_set("prune_full:reviewnote", str(time.time()))
+
+
 async def run_poll(bot, demo: bool) -> None:
     new_items = await collect_new(demo)
     if config.PURGE_GRACE_DAYS > 0:
@@ -371,6 +415,7 @@ async def run_poll(bot, demo: bool) -> None:
     await _kakao_backfill()
     await _geo_backfill()
     await _place_backfill(limit=80)
+    await _prune_reviewnote()                   # 리뷰노트 마감(조기마감 포함) 정리(3h 주기)
     if new_items:
         sent = await notify_new(bot, new_items)
         log.info("신규 %d건 → 메시지 %d건 발송", len(new_items), sent)
