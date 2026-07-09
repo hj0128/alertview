@@ -605,7 +605,7 @@ async def campaigns(request: Request, response: Response):
         limit = config.FEED_PAGE
     limit = max(1, min(limit, 200))
     sort = request.query_params.get("sort", "recent")
-    if sort not in ("recent", "deadline", "competition"):
+    if sort not in ("recent", "remaining", "deadline", "competition"):
         sort = "recent"
     fav_only = request.query_params.get("fav") == "1" and not guest
     q = request.query_params.get("q", "").strip().lower()   # 검색어(제목·지역)
@@ -641,6 +641,7 @@ async def campaigns(request: Request, response: Response):
             "channel": r["channel"] or "", "dday": _live_dday(r),
             "competition": r["competition"], "applicants": r["applicants"], "recruit": r["recruit"],
             "image": r["image"] if "image" in r.keys() else "",
+            "first_seen": r["first_seen"] or "",
             "is_new": (r["first_seen"] or "") >= new_cutoff,
             "is_viewed": (r["site"], r["cid"]) in viewed,
             "is_fav": (r["site"], r["cid"]) in fav_set,
@@ -652,9 +653,11 @@ async def campaigns(request: Request, response: Response):
         elif sort == "competition":  # 경쟁률 낮은순(미상은 뒤로)
             items.sort(key=lambda d: (d["competition"] is None,
                                       d["competition"] if d["competition"] is not None else 0))
-        else:                        # 최신순: D-day 많이 남은 것 먼저(미상은 뒤로)
+        elif sort == "remaining":    # 마감여유순: D-day 많이 남은 것 먼저(미상은 뒤로)
             items.sort(key=lambda d: (d["dday"] is None,
                                       -(d["dday"] if d["dday"] is not None else 0)))
+        else:                        # recent = 진짜 최신순: 수집 시각(first_seen) 늦은 순
+            items.sort(key=lambda d: d.get("first_seen") or "", reverse=True)
         return items
 
     if fav_only:
@@ -994,7 +997,8 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   <div class=top><h2 style="margin:0">📋 캠페인 <span id=cnt class=muted></span></h2>
     <div class=feedctl>
       <select id=sortsel class=sortsel onchange="changeSort()">
-        <option value=recent>최신순</option>
+        <option value=recent>최신순(수집순)</option>
+        <option value=remaining>마감여유순</option>
         <option value=deadline>마감임박순</option>
         <option value=competition>경쟁률↓</option>
       </select>
@@ -1031,7 +1035,7 @@ async function load(){
   document.getElementById('logoutlink').style.display=guest?'none':'';
   document.getElementById('favtgl').style.display=guest?'none':'';  // 찜은 로그인 사용자만
   const u=new URLSearchParams(location.search);          // URL 로 정렬·찜 지정 가능(공유/북마크)
-  if(['recent','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
+  if(['recent','remaining','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
   favOnly=(u.get('fav')==='1') && !guest;
   const uq=u.get('q'); if(uq){ searchQ=uq; const sb=document.getElementById('searchbox'); if(sb) sb.value=uq; }  // ?q= 검색 진입
   const only=u.get('only');   // 지도에서 지역 클릭: 다른 필터 전부 초기화하고 그 지역만

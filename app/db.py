@@ -709,8 +709,10 @@ def _order_by(sort: str) -> str:
         return f"(deadline IS NULL), deadline ASC, {tb} DESC"
     if sort == "competition":   # 경쟁률 낮은순
         return f"(competition IS NULL), competition ASC, {tb} DESC"
-    # recent(기본=최신순): D-day 많이 남은 것 먼저(마감 늦은 순)
-    return f"(deadline IS NULL), deadline DESC, {tb} DESC"
+    if sort == "remaining":     # 마감여유순: D-day 많이 남은 것 먼저(마감 늦은 순)
+        return f"(deadline IS NULL), deadline DESC, {tb} DESC"
+    # recent(기본=최신순): 수집 시각(first_seen) 늦은 순 = 방금 올라온 것 먼저
+    return f"first_seen DESC, {tb} DESC"
 
 
 def list_page(offset: int, limit: int, sort: str = "recent") -> List[dict]:
