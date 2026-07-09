@@ -194,15 +194,8 @@ async def api_map(request: Request, response: Response):
     return {"points": out}
 
 
-@app.get("/map", response_class=HTMLResponse)
-async def map_page(request: Request):
-    return HTMLResponse("""<!doctype html><html lang=ko><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>지역 지도 · 체험단</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+_MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>체험단 지도</title>
 <style>html,body{margin:0;height:100%;font-family:-apple-system,'Malgun Gothic',sans-serif}
 #bar{position:fixed;z-index:1000;top:0;left:0;right:0;height:46px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.1);
   display:flex;align-items:center;gap:12px;padding:0 14px}
@@ -218,23 +211,72 @@ async def map_page(request: Request):
 <span id=leg><span><i style="background:#e4572e"></i>맛집</span><span><i style="background:#2e9e5b"></i>여가</span><span><i style="background:#d6336c"></i>뷰티</span></span>
 <a href="/">← 피드로</a></div>
 <div id=map></div>
+"""
+
+# 카카오맵 버전(한글 지도). KAKAO_JS_KEY 필요(플랫폼 Web 에 도메인 등록 필수).
+_KAKAO_MAP_HTML = _MAP_HEAD + """
+<script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_JS_KEY__&libraries=clusterer&autoload=false"></script>
+<script>
+const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function pinImg(cat){const col=CATC[cat]||'#3b6ef6';
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="26" height="34" viewBox="0 0 26 34">'
+    +'<path d="M13 1C6.4 1 1 6.4 1 13c0 8.5 12 20 12 20s12-11.5 12-20C25 6.4 19.6 1 13 1z" fill="'+col+'" stroke="#fff" stroke-width="2"/>'
+    +'<circle cx="13" cy="13" r="4.4" fill="#fff"/></svg>';
+  return new kakao.maps.MarkerImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),
+    new kakao.maps.Size(26,34), {offset:new kakao.maps.Point(13,33)});}
+kakao.maps.load(function(){
+  const map=new kakao.maps.Map(document.getElementById('map'),
+    {center:new kakao.maps.LatLng(36.4,127.9), level:13});
+  map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
+  const clusterer=new kakao.maps.MarkerClusterer({map:map, averageCenter:true, minLevel:6, gridSize:70,
+    styles:[{width:'40px',height:'40px',background:'rgba(240,100,24,.9)',borderRadius:'20px',
+      color:'#fff',textAlign:'center',lineHeight:'40px',fontWeight:'700',border:'3px solid #fff',
+      boxShadow:'0 2px 8px rgba(0,0,0,.3)'}]});
+  const iw=new kakao.maps.InfoWindow({removable:true, zIndex:2});
+  fetch('/api/map').then(r=>r.json()).then(d=>{
+    const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
+    document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
+    const markers=pts.map(p=>{
+      const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.title});
+      const dd=(p.dday==null)?'':(p.dday===0?'오늘마감':'D-'+p.dday);
+      const html='<div style="padding:9px 11px;max-width:230px;font-size:13px;line-height:1.55">'
+        +'<b>'+esc(p.title)+'</b><br><span style="color:#666">'+(p.place?esc(p.place)+' · ':'')+esc(p.region)+'</span>'
+        +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
+        +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
+        +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a></div>';
+      kakao.maps.event.addListener(m,'click',function(){iw.setContent(html); iw.open(map,m);});
+      return m;
+    });
+    clusterer.addMarkers(markers);
+  }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+});
+</script></body></html>"""
+
+# 폴백(영어) 버전: KAKAO_JS_KEY 미설정 시. CartoDB 연회색 + Leaflet 클러스터.
+_LEAFLET_MAP_HTML = ("""<!doctype html><html lang=ko><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>체험단 지도</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+""" + _MAP_HEAD.split("</head>", 1)[1] + """
 <script>
 const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {maxZoom:19,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-function pin(cat){const col=CATC[cat]||'#3b6ef6';   // 물방울 핀(끝점이 위치)
+function pin(cat){const col=CATC[cat]||'#3b6ef6';
   return L.divIcon({className:'cmark',iconSize:[26,34],iconAnchor:[13,33],popupAnchor:[0,-30],
     html:'<svg width=26 height=34 viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">'
       +'<path d="M13 1C6.4 1 1 6.4 1 13c0 8.5 12 20 12 20s12-11.5 12-20C25 6.4 19.6 1 13 1z" fill="'+col+'" stroke="#fff" stroke-width="2"/>'
       +'<circle cx=13 cy=13 r=4.4 fill="#fff"/></svg>'});}
 function bubble(n){const sz=Math.min(56,24+Math.round(Math.log2(n+1))*3.5);
   return L.divIcon({className:'cmark',html:'<div class="b clus" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
-const cluster=L.markerClusterGroup({
-  showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:44,
-  iconCreateFunction:c=>bubble(c.getChildCount())      // 클러스터 = 그 안의 캠페인 수
-});
+const cluster=L.markerClusterGroup({showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:44,
+  iconCreateFunction:c=>bubble(c.getChildCount())});
 fetch('/api/map').then(r=>r.json()).then(d=>{
   const pts=d.points||[];
   document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
@@ -246,13 +288,20 @@ fetch('/api/map').then(r=>r.json()).then(d=>{
       +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
       +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
       +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a>';
-    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)});
-    m.bindPopup(html);
-    cluster.addLayer(m);
+    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(html); cluster.addLayer(m);
   });
   map.addLayer(cluster);
 }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
-</script></body></html>""", headers={"Cache-Control": "no-store"})
+</script></body></html>""")
+
+
+@app.get("/map", response_class=HTMLResponse)
+async def map_page(request: Request):
+    if config.KAKAO_JS_KEY:
+        html = _KAKAO_MAP_HTML.replace("__KAKAO_JS_KEY__", config.KAKAO_JS_KEY)
+    else:
+        html = _LEAFLET_MAP_HTML
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 def verify_telegram_auth(data: dict) -> bool:

@@ -60,6 +60,11 @@ CHVU_MIN_INTERVAL = int(os.getenv("CHVU_MIN_INTERVAL", "1800"))
 # 비우면 내장 사전만 사용(미해결은 시/도까지만 또는 미표시). 무료 키: developers.kakao.com
 KAKAO_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY", "").strip()
 
+# 지도(웹) 표시용 카카오맵 JavaScript 키. REST 키와 별개(같은 카카오 앱의 'JavaScript 키').
+# 카카오 developers > 앱 > 앱 키 > JavaScript 키. 그리고 앱 > 플랫폼 > Web 에 도메인 등록 필요.
+# 비우면 지도 배경은 기존(영어) 대체 지도로 표시.
+KAKAO_JS_KEY = os.getenv("KAKAO_JS_KEY", "").strip()
+
 # 웹 피드: 무한스크롤 1회 로드 개수, 필터링 시 훑을 최대 행 수
 FEED_PAGE = int(os.getenv("FEED_PAGE", "60"))
 FEED_SCAN_MAX = int(os.getenv("FEED_SCAN_MAX", "20000"))
