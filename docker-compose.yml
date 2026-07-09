@@ -28,6 +28,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-alertview}:${POSTGRES_PASSWORD:-alertview}@db:5432/${POSTGRES_DB:-alertview}
       # 컨테이너 내부 포트는 8000 고정(아래 ports 매핑과 일치).
       WEB_PORT: "8000"
+      # 앱 로컬시각=한국시간(KST). 방해금지(QUIET)·마감일 계산·타임스탬프가 KST 기준이 됨.
+      # (미설정 시 UTC 라 방해금지 23~8 이 실제론 KST 08~17 로 밀렸었음)
+      TZ: Asia/Seoul
     ports:
       - "${HOST_PORT:-8000}:8000"
     depends_on:
