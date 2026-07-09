@@ -174,7 +174,7 @@ async def api_inquiry(request: Request):
 async def api_map(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     today = datetime.date.today()
-    out = []
+    groups: dict = {}
     for p in db.active_place_points():
         dl = p.get("deadline")
         dday = None
@@ -184,13 +184,26 @@ async def api_map(request: Request, response: Response):
                 dday = d if d >= 0 else None
             except ValueError:
                 pass
-        out.append({
-            "lat": p["lat"], "lng": p["lng"], "title": p["title"] or "",
-            "url": p["url"] or "", "region": p["region"] or "",
-            "category": category_of(p["category"], p["title"] or ""),
-            "place": p["place"] or "", "dday": dday,
+        place = p["place"] or ""
+        # 같은 가게 묶기: 카카오 상호명+좌표(가장 정확). 상호명 없으면 제목+지역 병합키로.
+        if place:
+            key = ("P", place, round(p["lat"], 5), round(p["lng"], 5))
+        else:
+            key = ("M", _merge_key(p["title"] or "", p["region"] or ""))
+        g = groups.get(key)
+        if g is None:
+            g = {"lat": p["lat"], "lng": p["lng"], "region": p["region"] or "",
+                 "category": category_of(p["category"], p["title"] or ""),
+                 "name": place or _MERGE_BRK.sub("", p["title"] or "").strip(),
+                 "items": []}
+            groups[key] = g
+        g["items"].append({
+            "channel": p["channel"] or "", "url": p["url"] or "", "dday": dday,
             "site": _SITE_NAMES.get(p["site"], p["site"]),
         })
+    out = [{"lat": g["lat"], "lng": g["lng"], "region": g["region"], "category": g["category"],
+            "name": g["name"], "count": len(g["items"]), "items": g["items"]}
+           for g in groups.values()]
     return {"points": out}
 
 
@@ -220,6 +233,18 @@ _KAKAO_MAP_HTML = _MAP_HEAD + """
 function _diag(msg){var h=document.getElementById('hint'); if(h) h.textContent=String(msg).slice(0,140);}
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function popupHtml(p){                                   // 가게 1개 = 채널별 캠페인 목록
+  var lines='';
+  (p.items||[]).forEach(function(it){
+    var dd=(it.dday==null)?'':(it.dday===0?'오늘마감':'D-'+it.dday);
+    var label=(it.channel?'['+esc(it.channel)+'] ':'')+esc(it.site)+(dd?' · '+dd:'');
+    lines+='<div style="margin-top:5px"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+label+' →</a></div>';
+  });
+  return '<div style="padding:9px 11px;max-width:250px;font-size:13px;line-height:1.5">'
+    +'<b>'+esc(p.name)+'</b><br><span style="color:#666">'+esc(p.region)+'</span>'
+    +' · <span style="color:#888;font-size:12px">'+esc(p.category)+(p.count>1?' · '+p.count+'건':'')+'</span>'
+    +lines+'</div>';
+}
 function pinImg(cat){const col=CATC[cat]||'#3b6ef6';
   const svg='<svg xmlns="http://www.w3.org/2000/svg" width="26" height="34" viewBox="0 0 26 34">'
     +'<path d="M13 1C6.4 1 1 6.4 1 13c0 8.5 12 20 12 20s12-11.5 12-20C25 6.4 19.6 1 13 1z" fill="'+col+'" stroke="#fff" stroke-width="2"/>'
@@ -241,15 +266,11 @@ else kakao.maps.load(function(){
   kakao.maps.event.addListener(map,'click',function(){iw.close();});   // 지도 빈 곳 클릭 → 정보창 닫기
   fetch('/api/map').then(r=>r.json()).then(d=>{
     const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
-    document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
+    const total=pts.reduce((a,p)=>a+(p.count||1),0);
+    document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
     const markers=pts.map(p=>{
-      const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.title});
-      const dd=(p.dday==null)?'':(p.dday===0?'오늘마감':'D-'+p.dday);
-      const html='<div style="padding:9px 11px;max-width:230px;font-size:13px;line-height:1.55">'
-        +'<b>'+esc(p.title)+'</b><br><span style="color:#666">'+(p.place?esc(p.place)+' · ':'')+esc(p.region)+'</span>'
-        +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
-        +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
-        +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a></div>';
+      const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.name});
+      const html=popupHtml(p);
       kakao.maps.event.addListener(m,'click',function(){iw.setContent(html); iw.open(map,m);});
       return m;
     });
@@ -282,18 +303,22 @@ function bubble(n){const sz=Math.min(56,24+Math.round(Math.log2(n+1))*3.5);
   return L.divIcon({className:'cmark',html:'<div class="b clus" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
 const cluster=L.markerClusterGroup({showCoverageOnHover:false, spiderfyOnMaxZoom:true, maxClusterRadius:44,
   iconCreateFunction:c=>bubble(c.getChildCount())});
+function popupHtml(p){
+  var lines='';
+  (p.items||[]).forEach(function(it){
+    var dd=(it.dday==null)?'':(it.dday===0?'오늘마감':'D-'+it.dday);
+    var label=(it.channel?'['+esc(it.channel)+'] ':'')+esc(it.site)+(dd?' · '+dd:'');
+    lines+='<div style="margin-top:5px"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+label+' →</a></div>';
+  });
+  return '<b>'+esc(p.name)+'</b><br><span style="color:#666">'+esc(p.region)+'</span>'
+    +' · <span style="color:#888;font-size:12px">'+esc(p.category)+(p.count>1?' · '+p.count+'건':'')+'</span>'+lines;
+}
 fetch('/api/map').then(r=>r.json()).then(d=>{
-  const pts=d.points||[];
-  document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
+  const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
+  const total=pts.reduce((a,p)=>a+(p.count||1),0);
+  document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
   pts.forEach(p=>{
-    if(p.lat==null||p.lng==null)return;
-    const dd=(p.dday==null)?'':(p.dday===0?'오늘마감':'D-'+p.dday);
-    const html='<b>'+esc(p.title)+'</b><br>'
-      +'<span style="color:#666">'+(p.place?esc(p.place)+' · ':'')+esc(p.region)+'</span>'
-      +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
-      +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
-      +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a>';
-    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(html); cluster.addLayer(m);
+    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(popupHtml(p)); cluster.addLayer(m);
   });
   map.addLayer(cluster);
 }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});

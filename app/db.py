@@ -855,7 +855,7 @@ def active_place_points(limit: int = 20000) -> list:
     with _lock:
         rows = _c().execute(_q(
             "SELECT s.site AS site, s.cid AS cid, s.title AS title, s.url AS url, "
-            "s.region AS region, s.category AS category, s.deadline AS deadline, "
+            "s.region AS region, s.category AS category, s.channel AS channel, s.deadline AS deadline, "
             "p.lat AS lat, p.lng AS lng, p.place AS place "
             "FROM seen s JOIN place_geo p ON p.site=s.site AND p.cid=s.cid "
             f"WHERE p.lat IS NOT NULL AND ({_ACTIVE}) "
