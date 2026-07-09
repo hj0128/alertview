@@ -207,21 +207,28 @@ async def map_page(request: Request):
 #bar{position:fixed;z-index:1000;top:0;left:0;right:0;height:46px;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.1);
   display:flex;align-items:center;gap:12px;padding:0 14px}
 #bar b{font-size:15px} #bar a{color:#3b6ef6;text-decoration:none;font-size:14px;margin-left:auto}
-#map{position:absolute;top:46px;bottom:0;left:0;right:0}
-.cmark .b{background:#3b6ef6;color:#fff;border-radius:16px;min-width:26px;height:26px;padding:0 6px;
-  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);border:2px solid #fff}
-.cmark .b.clus{background:#e59409}</style></head><body>
-<div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span><a href="/">← 피드로</a></div>
+#map{position:absolute;top:46px;bottom:0;left:0;right:0;background:#eaeaea}
+#leg{font-size:12px;color:#555;display:flex;gap:9px;align-items:center}
+#leg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:3px;vertical-align:middle;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15)}
+.cmark .b{color:#fff;border-radius:50%;min-width:30px;height:30px;padding:0 6px;
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;
+  box-shadow:0 2px 8px rgba(0,0,0,.35);border:3px solid #fff}
+.cmark .b.clus{background:#f06418}</style></head><body>
+<div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span>
+<span id=leg><span><i style="background:#e4572e"></i>맛집</span><span><i style="background:#2e9e5b"></i>여가</span><span><i style="background:#d6336c"></i>뷰티</span></span>
+<a href="/">← 피드로</a></div>
 <div id=map></div>
 <script>
 const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  {maxZoom:19,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-function dot(cat){const col=CATC[cat]||'#3b6ef6';
-  return L.divIcon({className:'cmark',iconSize:[16,16],iconAnchor:[8,8],
-    html:'<div style="width:14px;height:14px;border-radius:50%;background:'+col+';border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>'});}
+function pin(cat){const col=CATC[cat]||'#3b6ef6';   // 물방울 핀(끝점이 위치)
+  return L.divIcon({className:'cmark',iconSize:[26,34],iconAnchor:[13,33],popupAnchor:[0,-30],
+    html:'<svg width=26 height=34 viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">'
+      +'<path d="M13 1C6.4 1 1 6.4 1 13c0 8.5 12 20 12 20s12-11.5 12-20C25 6.4 19.6 1 13 1z" fill="'+col+'" stroke="#fff" stroke-width="2"/>'
+      +'<circle cx=13 cy=13 r=4.4 fill="#fff"/></svg>'});}
 function bubble(n){const sz=Math.min(56,24+Math.round(Math.log2(n+1))*3.5);
   return L.divIcon({className:'cmark',html:'<div class="b clus" style="min-width:'+sz+'px;height:'+sz+'px">'+n+'</div>',iconSize:[sz,sz]});}
 const cluster=L.markerClusterGroup({
@@ -239,7 +246,7 @@ fetch('/api/map').then(r=>r.json()).then(d=>{
       +(dd?' · <b style="color:#e4572e">'+dd+'</b>':'')+'<br>'
       +'<span style="color:#888;font-size:12px">'+esc(p.category)+' · '+esc(p.site)+'</span><br>'
       +'<a href="'+esc(p.url)+'" target="_blank" rel="noopener">캠페인 보러가기 →</a>';
-    const m=L.marker([p.lat,p.lng],{icon:dot(p.category)});
+    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)});
     m.bindPopup(html);
     cluster.addLayer(m);
   });
