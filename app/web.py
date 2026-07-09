@@ -214,14 +214,17 @@ _MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   display:flex;align-items:center;gap:12px;padding:0 14px}
 #bar b{font-size:15px} #bar a{color:#3b6ef6;text-decoration:none;font-size:14px;margin-left:auto}
 #map{position:absolute;top:46px;bottom:0;left:0;right:0;background:#eaeaea}
-#leg{font-size:12px;color:#555;display:flex;gap:9px;align-items:center}
+#leg{font-size:12px;color:#555;display:flex;gap:4px;align-items:center}
 #leg i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:3px;vertical-align:middle;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.15)}
+.legchip{cursor:pointer;user-select:none;padding:3px 7px;border-radius:12px;white-space:nowrap}
+.legchip:hover{background:#f1f3f5}
+.legchip.off{opacity:.4;text-decoration:line-through}
 .cmark .b{color:#fff;border-radius:50%;min-width:30px;height:30px;padding:0 6px;
   display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;
   box-shadow:0 2px 8px rgba(0,0,0,.35);border:3px solid #fff}
 .cmark .b.clus{background:#f06418}</style></head><body>
 <div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span>
-<span id=leg><span><i style="background:#e4572e"></i>맛집</span><span><i style="background:#2e9e5b"></i>여가</span><span><i style="background:#d6336c"></i>뷰티</span><span><i style="background:#f08c00"></i>포장</span></span>
+<span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#f08c00"></i>포장</span></span>
 <a href="/">← 피드로</a></div>
 <div id=map></div>
 """
@@ -240,7 +243,8 @@ function popupHtml(p){                                   // 가게 1개 = 채널
     var label=(it.channel?'['+esc(it.channel)+'] ':'')+esc(it.site)+(dd?' · '+dd:'');
     lines+='<div style="margin-top:5px"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+label+' →</a></div>';
   });
-  return '<div style="padding:9px 11px;max-width:250px;font-size:13px;line-height:1.5">'
+  return '<div style="width:230px;box-sizing:border-box;padding:10px 26px 11px 12px;'
+    +'font-size:13px;line-height:1.5;word-break:break-word;white-space:normal">'
     +'<b>'+esc(p.name)+'</b><br><span style="color:#666">'+esc(p.region)+'</span>'
     +' · <span style="color:#888;font-size:12px">'+esc(p.category)+(p.count>1?' · '+p.count+'건':'')+'</span>'
     +lines+'</div>';
@@ -268,13 +272,23 @@ else kakao.maps.load(function(){
     const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
     const total=pts.reduce((a,p)=>a+(p.count||1),0);
     document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
+    const byCat={};
     const markers=pts.map(p=>{
       const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.name});
       const html=popupHtml(p);
       kakao.maps.event.addListener(m,'click',function(){iw.setContent(html); iw.open(map,m);});
+      (byCat[p.category]=byCat[p.category]||[]).push(m);
       return m;
     });
     clusterer.addMarkers(markers);
+    document.querySelectorAll('#leg .legchip').forEach(function(el){   // 범례 클릭 = 카테고리 토글
+      const cat=el.dataset.cat; let on=true;
+      el.onclick=function(){
+        on=!on; el.classList.toggle('off',!on); iw.close();
+        if(on) clusterer.addMarkers(byCat[cat]||[]);
+        else clusterer.removeMarkers(byCat[cat]||[]);
+      };
+    });
   }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
 });
 </script></body></html>"""
@@ -317,10 +331,19 @@ fetch('/api/map').then(r=>r.json()).then(d=>{
   const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
   const total=pts.reduce((a,p)=>a+(p.count||1),0);
   document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
+  const byCat={};
   pts.forEach(p=>{
     const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(popupHtml(p)); cluster.addLayer(m);
+    (byCat[p.category]=byCat[p.category]||[]).push(m);
   });
   map.addLayer(cluster);
+  document.querySelectorAll('#leg .legchip').forEach(function(el){
+    const cat=el.dataset.cat; let on=true;
+    el.onclick=function(){
+      on=!on; el.classList.toggle('off',!on);
+      (byCat[cat]||[]).forEach(m=>{ on?cluster.addLayer(m):cluster.removeLayer(m); });
+    };
+  });
 }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
 </script></body></html>""")
 
