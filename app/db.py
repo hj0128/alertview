@@ -850,7 +850,7 @@ def places_missing_geo(limit: int = 40) -> list:
     return [dict(r) for r in rows]
 
 
-def active_place_points(limit: int = 20000) -> list:
+def active_place_points(limit: int = 40000) -> list:
     """지도용: 정밀 좌표가 있는 활성 캠페인들(최신 수집순)."""
     with _lock:
         rows = _c().execute(_q(
