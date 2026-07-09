@@ -246,32 +246,49 @@ async def _geo_backfill(limit: int = 60) -> None:
 _BRK = re.compile(r"\[[^\]]*\]")     # 제목의 [지역]·[채널]·[카테고리] 태그
 
 
-_SUFFIX = re.compile(r"\s*(본점|직영점|지점|점)$")   # '토토스시 동성로 본점' → '토토스시 동성로'
+_PARENS = re.compile(r"[\(\[][^)\]]*[\)\]]")   # (포장) (중식당) (r) (본점) 등 괄호 묶음
+# 채널/유형/마커 노이즈 단어(질의에서 제거). '포장마차' 같은 실제 상호와 겹치지 않게 '단어 단위'로만 제거.
+_NOISE_WORDS = {"릴스체험단", "인스타체험단", "체험단", "릴스", "인스타", "인스타그램", "블로그", "클립",
+                "숏츠", "숏폼", "유튜브", "유투브", "포스팅", "방문형", "배송형", "기자단", "체험권"}
 
 
 def _venue_name(title: str) -> str:
-    """제목에서 대괄호 태그를 걷어낸 업체명(지오코딩 질의용). 과도한 설명 방지로 길이 제한."""
+    """제목에서 대괄호 태그를 걷어낸 업체명(빈 텍스트 판별용). 과도한 설명 방지로 길이 제한."""
     t = _BRK.sub(" ", title or "")
     t = re.sub(r"\s+", " ", t).strip()
     return t[:30]
 
 
+def _clean_venue(title: str) -> str:
+    """지오코딩 질의용 업체명 정제: [태그]·(괄호)·채널/유형 노이즈·끝의 r 마커 제거."""
+    t = _BRK.sub(" ", title or "")
+    t = _PARENS.sub(" ", t)
+    out = []
+    for w in t.split():
+        w = w.strip("-_/.·,")
+        if not w or w in _NOISE_WORDS or re.fullmatch(r"[rR]", w):
+            continue
+        out.append(w)
+    return " ".join(out)[:30]
+
+
 def _venue_queries(title: str) -> list:
-    """느슨한 순서의 후보 질의: 전체 → 본점/점 접미사 제거 → 앞 2어절.
+    """느슨한 순서의 후보 질의: 정제 전체 → 앞 2어절 → 첫 어절.
     지역어는 붙이지 않고(질의 과협소 방지) 결과는 시/도로 검증한다."""
-    v = _venue_name(title)
+    v = _clean_venue(title)
     out: list = []
 
     def add(x):
-        x = (x or "").strip()
+        x = (x or "").strip(" -_/.·,")
         if x and x not in out:
             out.append(x)
 
     add(v)
-    add(_SUFFIX.sub("", v))
     w = v.split()
-    if len(w) >= 2:
+    if len(w) > 2:
         add(" ".join(w[:2]))
+    if len(w) > 1:
+        add(w[0])
     return out[:3]
 
 
