@@ -272,10 +272,15 @@ def _clean_venue(title: str) -> str:
     return " ".join(out)[:30]
 
 
-def _venue_queries(title: str) -> list:
-    """느슨한 순서의 후보 질의: 정제 전체 → 앞 2어절 → 첫 어절.
-    지역어는 붙이지 않고(질의 과협소 방지) 결과는 시/도로 검증한다."""
+def _venue_queries(title: str, region: str = "") -> list:
+    """느슨한 순서의 후보 질의. 흔한 상호(서정·탁주 등)는 지역을 붙여야 잡히므로
+    '핵심어절+지역'을 먼저, 그다음 업체명만. 결과는 다시 시/도로 검증한다."""
     v = _clean_venue(title)
+    reg = (region or "").strip()
+    sido = reg.split()[0] if reg else ""
+    w = v.split()
+    core = " ".join(w[:2]) if len(w) > 2 else v      # 핵심 2어절(설명 꼬리 제거)
+    first = w[0] if w else ""
     out: list = []
 
     def add(x):
@@ -283,20 +288,20 @@ def _venue_queries(title: str) -> list:
         if x and x not in out:
             out.append(x)
 
-    add(v)
-    w = v.split()
-    if len(w) > 2:
-        add(" ".join(w[:2]))
-    if len(w) > 1:
-        add(w[0])
+    if reg:
+        add(f"{core} {reg}")     # 핵심어절 + 지역(공통명 정확도 ↑)
+    add(core)                    # 업체명만(지역어가 오히려 방해될 때)
+    if first and first != core:
+        add(f"{first} {sido}" if sido else first)
     return out[:3]
 
 
 async def _geocode_campaign(client, headers, title: str, region: str):
     """여러 후보 질의로 카카오 키워드 검색 → 시/도 일치하는 첫 결과.
-    반환: (lat,lng,place,addr) | 'AUTH'(인증거부) | 'ERR'(일시오류). 미매칭이면 (None,None,'','')."""
+    반환: (lat,lng,place,addr) | 'AUTH'(인증거부) | 'QUOTA'(일일한도 초과) | 'ERR'(일시오류).
+    미매칭이면 (None,None,'',''). QUOTA/ERR 은 미스로 캐시하면 안 됨(재조회 대상)."""
     sido = region.split()[0] if region else ""
-    for query in _venue_queries(title):
+    for query in _venue_queries(title, region):
         try:
             resp = await client.get(
                 "https://dapi.kakao.com/v2/local/search/keyword.json",
@@ -305,6 +310,8 @@ async def _geocode_campaign(client, headers, title: str, region: str):
             return "ERR"
         if resp.status_code in (401, 403):
             return "AUTH"
+        if resp.status_code == 429 or (resp.status_code == 400 and "exceed" in resp.text.lower()):
+            return "QUOTA"                     # 일일 한도 초과 → 미스 캐시 금지
         if resp.status_code != 200:
             continue
         for d in (resp.json().get("documents") or []):
@@ -335,6 +342,9 @@ async def _place_backfill(limit: int = 40) -> None:
             res = await _geocode_campaign(client, headers, r["title"], r["region"] or "")
             if res == "AUTH":
                 log.warning("[place] 카카오 인증 거부 → 이번 주기 중단")
+                return
+            if res == "QUOTA":
+                log.warning("[place] 카카오 일일 한도 초과 → 이번 주기 중단(내일 재시도)")
                 return
             if res == "ERR":
                 continue                       # 일시 오류 → 캐시 안 함(다음 주기 재시도)

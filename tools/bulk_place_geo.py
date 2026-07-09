@@ -18,8 +18,8 @@ async def _one(client, sem, headers, r):
         return 0
     async with sem:
         res = await _geocode_campaign(client, headers, r["title"], r["region"] or "")
-    if res == "AUTH":
-        print("카카오 인증 거부"); return -1
+    if res in ("AUTH", "QUOTA"):
+        print("중단:", res); return -1
     if res == "ERR":
         return 0                       # 일시 오류 → 캐시 안 함(다음에 재시도)
     lat, lng, place, addr = res
