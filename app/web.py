@@ -238,6 +238,7 @@ else kakao.maps.load(function(){
       color:'#fff',textAlign:'center',lineHeight:'40px',fontWeight:'700',border:'3px solid #fff',
       boxShadow:'0 2px 8px rgba(0,0,0,.3)'}]});
   const iw=new kakao.maps.InfoWindow({removable:true, zIndex:2});
+  kakao.maps.event.addListener(map,'click',function(){iw.close();});   // 지도 빈 곳 클릭 → 정보창 닫기
   fetch('/api/map').then(r=>r.json()).then(d=>{
     const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
     document.getElementById('hint').textContent=pts.length.toLocaleString()+'개 캠페인 (실제 위치)';
