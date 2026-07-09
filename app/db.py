@@ -821,7 +821,8 @@ def regions_missing_geo(limit: int = 60) -> list:
 
 # --- 캠페인별 정밀 좌표(place_geo): 업체명 지오코딩용 ---
 # 지도에 실제 위치로 찍을 방문형 카테고리(오프라인 매장 존재).
-_PLACE_CATS = ("맛집", "여가", "뷰티")
+# 포장=매장 방문 픽업이라 위치 있음(배송=택배와 다름).
+_PLACE_CATS = ("맛집", "여가", "뷰티", "포장")
 
 
 def place_geo_set(site: str, cid: str, lat, lng, place: str = "", addr: str = "") -> None:
