@@ -174,6 +174,15 @@ async def api_inquiry(request: Request):
 async def api_map(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     today = datetime.date.today()
+    # 옵트인: mine=1 이고 로그인 상태면 피드에 저장한 필터를 지도에도 적용
+    f = None
+    if request.query_params.get("mine") == "1":
+        uid = _uid(request)
+        if uid:
+            ff = db.get_all_filters(uid)
+            has = (ff.get("sites") or ff["keywords"] or ff["regions"] or ff["categories"]
+                   or ff["channels"] or any(ff.get(k) is not None for k in NUMERIC_FILTERS))
+            f = ff if has else None
     groups: dict = {}
     for p in db.active_place_points():
         dl = p.get("deadline")
@@ -184,6 +193,13 @@ async def api_map(request: Request, response: Response):
                 dday = d if d >= 0 else None
             except ValueError:
                 pass
+        if f is not None:                        # 피드 필터 적용(옵트인)
+            c = Campaign(site=p["site"], site_name="", cid=p["cid"], title=p["title"] or "",
+                         url=p["url"] or "", region=p["region"] or "", category=p["category"] or "",
+                         channel=p["channel"] or "", dday=dday, competition=p["competition"],
+                         recruit=p["recruit"], applicants=p["applicants"])
+            if not matches_filter(c, f):
+                continue
         place = p["place"] or ""
         # 같은 가게 묶기: 카카오 상호명+좌표(가장 정확). 상호명 없으면 제목+지역 병합키로.
         if place:
@@ -219,13 +235,15 @@ _MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 .legchip{cursor:pointer;user-select:none;padding:3px 7px;border-radius:12px;white-space:nowrap}
 .legchip:hover{background:#f1f3f5}
 .legchip.off{opacity:.4;text-decoration:line-through}
+.minebtn{font-size:12px;padding:4px 10px;border:1px solid #ccd0e0;border-radius:14px;background:#fff;color:#555;cursor:pointer;white-space:nowrap}
+.minebtn.on{background:#3b6ef6;color:#fff;border-color:#3b6ef6}
 .cmark .b{color:#fff;border-radius:50%;min-width:30px;height:30px;padding:0 6px;
   display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;
   box-shadow:0 2px 8px rgba(0,0,0,.35);border:3px solid #fff}
 .cmark .b.clus{background:#f06418}</style></head><body>
 <div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span>
 <span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#f08c00"></i>포장</span></span>
-<a href="/">← 피드로</a></div>
+__MINE_BTN__<a href="/">← 피드로</a></div>
 <div id=map></div>
 """
 
@@ -268,28 +286,36 @@ else kakao.maps.load(function(){
       boxShadow:'0 2px 8px rgba(0,0,0,.3)'}]});
   const iw=new kakao.maps.InfoWindow({removable:true, zIndex:2});
   kakao.maps.event.addListener(map,'click',function(){iw.close();});   // 지도 빈 곳 클릭 → 정보창 닫기
-  fetch('/api/map').then(r=>r.json()).then(d=>{
-    const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
-    const total=pts.reduce((a,p)=>a+(p.count||1),0);
-    document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
-    const byCat={};
-    const markers=pts.map(p=>{
-      const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.name});
-      const html=popupHtml(p);
-      kakao.maps.event.addListener(m,'click',function(){iw.setContent(html); iw.open(map,m);});
-      (byCat[p.category]=byCat[p.category]||[]).push(m);
-      return m;
-    });
-    clusterer.addMarkers(markers);
-    document.querySelectorAll('#leg .legchip').forEach(function(el){   // 범례 클릭 = 카테고리 토글
-      const cat=el.dataset.cat; let on=true;
-      el.onclick=function(){
-        on=!on; el.classList.toggle('off',!on); iw.close();
-        if(on) clusterer.addMarkers(byCat[cat]||[]);
-        else clusterer.removeMarkers(byCat[cat]||[]);
-      };
-    });
-  }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+  let curMine=false;
+  function loadPins(){
+    iw.close(); clusterer.clear();
+    document.getElementById('hint').textContent='불러오는 중…';
+    fetch('/api/map'+(curMine?'?mine=1':'')).then(r=>r.json()).then(d=>{
+      const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
+      const total=pts.reduce((a,p)=>a+(p.count||1),0);
+      document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
+      const byCat={};
+      const markers=pts.map(p=>{
+        const m=new kakao.maps.Marker({position:new kakao.maps.LatLng(p.lat,p.lng), image:pinImg(p.category), title:p.name});
+        const html=popupHtml(p);
+        kakao.maps.event.addListener(m,'click',function(){iw.setContent(html); iw.open(map,m);});
+        (byCat[p.category]=byCat[p.category]||[]).push(m);
+        return m;
+      });
+      clusterer.addMarkers(markers);
+      document.querySelectorAll('#leg .legchip').forEach(function(el){   // 범례 클릭 = 카테고리 토글
+        el.classList.remove('off'); const cat=el.dataset.cat; let on=true;
+        el.onclick=function(){
+          on=!on; el.classList.toggle('off',!on); iw.close();
+          if(on) clusterer.addMarkers(byCat[cat]||[]);
+          else clusterer.removeMarkers(byCat[cat]||[]);
+        };
+      });
+    }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+  }
+  loadPins();
+  var mb=document.getElementById('minebtn');
+  if(mb) mb.onclick=function(){curMine=!curMine; mb.classList.toggle('on',curMine); mb.textContent=curMine?'내 조건 ✓':'내 조건'; loadPins();};
 });
 </script></body></html>"""
 
@@ -327,24 +353,32 @@ function popupHtml(p){
   return '<b>'+esc(p.name)+'</b><br><span style="color:#666">'+esc(p.region)+'</span>'
     +' · <span style="color:#888;font-size:12px">'+esc(p.category)+(p.count>1?' · '+p.count+'건':'')+'</span>'+lines;
 }
-fetch('/api/map').then(r=>r.json()).then(d=>{
-  const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
-  const total=pts.reduce((a,p)=>a+(p.count||1),0);
-  document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
-  const byCat={};
-  pts.forEach(p=>{
-    const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(popupHtml(p)); cluster.addLayer(m);
-    (byCat[p.category]=byCat[p.category]||[]).push(m);
-  });
-  map.addLayer(cluster);
-  document.querySelectorAll('#leg .legchip').forEach(function(el){
-    const cat=el.dataset.cat; let on=true;
-    el.onclick=function(){
-      on=!on; el.classList.toggle('off',!on);
-      (byCat[cat]||[]).forEach(m=>{ on?cluster.addLayer(m):cluster.removeLayer(m); });
-    };
-  });
-}).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+map.addLayer(cluster);
+let curMine=false;
+function loadPins(){
+  cluster.clearLayers();
+  document.getElementById('hint').textContent='불러오는 중…';
+  fetch('/api/map'+(curMine?'?mine=1':'')).then(r=>r.json()).then(d=>{
+    const pts=(d.points||[]).filter(p=>p.lat!=null&&p.lng!=null);
+    const total=pts.reduce((a,p)=>a+(p.count||1),0);
+    document.getElementById('hint').textContent=pts.length.toLocaleString()+'곳 · '+total.toLocaleString()+'개 캠페인';
+    const byCat={};
+    pts.forEach(p=>{
+      const m=L.marker([p.lat,p.lng],{icon:pin(p.category)}); m.bindPopup(popupHtml(p)); cluster.addLayer(m);
+      (byCat[p.category]=byCat[p.category]||[]).push(m);
+    });
+    document.querySelectorAll('#leg .legchip').forEach(function(el){
+      el.classList.remove('off'); const cat=el.dataset.cat; let on=true;
+      el.onclick=function(){
+        on=!on; el.classList.toggle('off',!on);
+        (byCat[cat]||[]).forEach(m=>{ on?cluster.addLayer(m):cluster.removeLayer(m); });
+      };
+    });
+  }).catch(e=>{document.getElementById('hint').textContent='불러오기 실패';});
+}
+loadPins();
+var mb=document.getElementById('minebtn');
+if(mb) mb.onclick=function(){curMine=!curMine; mb.classList.toggle('on',curMine); mb.textContent=curMine?'내 조건 ✓':'내 조건'; loadPins();};
 </script></body></html>""")
 
 
@@ -354,6 +388,10 @@ async def map_page(request: Request):
         html = _KAKAO_MAP_HTML.replace("__KAKAO_JS_KEY__", config.KAKAO_JS_KEY)
     else:
         html = _LEAFLET_MAP_HTML
+    # '내 조건' 토글은 로그인(피드 필터 보유) 사용자에게만 노출
+    mine_btn = ('<button id=minebtn class=minebtn title="피드에 저장한 검색조건을 지도에 적용">내 조건</button>'
+                if _uid(request) else '')
+    html = html.replace("__MINE_BTN__", mine_btn)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
