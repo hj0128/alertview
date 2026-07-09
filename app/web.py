@@ -217,6 +217,7 @@ _MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
 _KAKAO_MAP_HTML = _MAP_HEAD + """
 <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_JS_KEY__&libraries=clusterer&autoload=false"></script>
 <script>
+function _diag(msg){var h=document.getElementById('hint'); if(h) h.textContent=String(msg).slice(0,140);}
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function pinImg(cat){const col=CATC[cat]||'#3b6ef6';
@@ -225,7 +226,10 @@ function pinImg(cat){const col=CATC[cat]||'#3b6ef6';
     +'<circle cx="13" cy="13" r="4.4" fill="#fff"/></svg>';
   return new kakao.maps.MarkerImage('data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg),
     new kakao.maps.Size(26,34), {offset:new kakao.maps.Point(13,33)});}
-kakao.maps.load(function(){
+if(typeof kakao==='undefined'||!kakao.maps){
+  _diag('카카오맵 로드 실패 — developers.kakao.com 에서 이 사이트 도메인을 [앱 설정 > 플랫폼 > Web]에 등록하세요');
+}
+else kakao.maps.load(function(){
   const map=new kakao.maps.Map(document.getElementById('map'),
     {center:new kakao.maps.LatLng(36.4,127.9), level:13});
   map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
