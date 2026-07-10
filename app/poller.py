@@ -63,7 +63,10 @@ async def collect_new(demo: bool) -> List[Campaign]:
                         continue                   # 이미 본 건: 갱신만 하고 신규 카운트 제외
                     stats["fresh"] += 1
                     db_new += 1
-                    if not deep:                   # 정기 새로고침(crawl_all)에서도 신규 알림은 유지
+                    # 알림은 평소 증분 수집에서만. 초기백필·정기새로고침(crawl_all)은 갱신만 하고
+                    # 알림 억제 → 깊은 페이지의 '오래된' 캠페인이 신규로 대량 발송되는 것 방지.
+                    # (진짜 신규 캠페인은 매시간 증분 폴링이 잡아 알림)
+                    if not crawl_all:
                         new_items.append(c)
                 # 끝까지 크롤: 초기백필·정기새로고침. 그 외 증분: 신규 없는 페이지에서 조기종료.
                 return True if crawl_all else (db_new > 0)
@@ -90,7 +93,8 @@ async def collect_new(demo: bool) -> List[Campaign]:
                 status = "ok"
             db.set_adapter_health(ad.key, cnt, status)
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
-                     " (전체 백필: 알림생략)" if deep else "")
+                     " (전체 백필: 알림생략)" if deep
+                     else " (전체 새로고침: 알림생략)" if do_refresh else "")
             _prune_unseen(ad, seen_cids)           # 소스에서 내려간 활성 캠페인 자동 삭제
     if do_refresh:
         db.meta_set("last_full_refresh", str(time.time()))   # 다음 전체 새로고침은 6h 뒤
