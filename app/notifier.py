@@ -60,9 +60,9 @@ async def remind_deadlines(bot: Bot) -> int:
     if not bot:
         return 0
     today = datetime.date.today()
-    quiet = _in_quiet_hours()
     sent = 0
     for chat_id in db.active_users():
+        quiet = _in_quiet_hours(chat_id)        # 사용자별 방해금지
         for r in db.favorites_rows(chat_id):
             dl = r.get("deadline")
             if not dl:
@@ -85,9 +85,14 @@ async def remind_deadlines(bot: Bot) -> int:
     return sent
 
 
-def _in_quiet_hours() -> bool:
-    """방해금지(밤) 시간대인가. QUIET_START==END 면 비활성. 자정 넘김 지원(예: 23~8)."""
+def _in_quiet_hours(chat_id=None) -> bool:
+    """방해금지(밤) 시간대인가. 사용자가 직접 설정했으면 그 값, 아니면 전역 기본(config).
+    START==END 면 비활성. 자정 넘김 지원(예: 23~8)."""
     s, e = config.QUIET_START, config.QUIET_END
+    if chat_id is not None:
+        us, ue = db.get_quiet(chat_id)
+        if us is not None and ue is not None:
+            s, e = us, ue
     if s == e:
         return False
     h = datetime.datetime.now().hour
@@ -108,7 +113,7 @@ async def _send(bot: Bot, chat_id, text: str) -> bool:
 async def flush_pending(bot: Bot) -> int:
     """방해금지 종료 후 대기열 발송: 신규는 사용자당 '요약 1건', 리마인더는 개별.
     알림 끈 사용자(active=0)에겐 보내지 않고 큐에서 제거."""
-    if not bot or _in_quiet_hours():
+    if not bot:
         return 0
     active = set(db.active_users())
     news: dict = {}      # chat_id -> [(id, line)]  (신규 요약용)
@@ -118,6 +123,8 @@ async def flush_pending(bot: Bot) -> int:
         if cid not in active:
             db.delete_pending(row["id"])            # 알림 끈 사용자 → 발송 안 함
             continue
+        if _in_quiet_hours(cid):
+            continue                                # 아직 이 사용자 방해금지 → 대기 유지
         if row.get("kind") == "reminder":
             await _send(bot, cid, row["text"])      # 리마인더는 개별(중요·소수)
             db.delete_pending(row["id"])
@@ -164,13 +171,15 @@ def _format_reco(rows: list) -> str:
 
 async def recommend_low_competition(bot: Bot, max_per_user: int = 5, threshold: float = 1.0) -> int:
     """매일 1회(방해금지 종료 후), 사용자 필터에 맞는 경쟁률 낮은(당첨확률 높은) 캠페인 추천."""
-    if not bot or _in_quiet_hours():
+    if not bot:
         return 0
     today = datetime.date.today().isoformat()
     if db.meta_get("recommend_date") == today:      # 오늘 이미 발송
         return 0
     sent = 0
     for chat_id in db.active_users():
+        if _in_quiet_hours(chat_id):                # 방해금지 중인 사용자는 이번엔 건너뜀
+            continue
         f = db.get_all_filters(chat_id)
         cands = []
         for r in db.list_active(sites=f.get("sites") or None):
@@ -195,8 +204,13 @@ async def recommend_low_competition(bot: Bot, max_per_user: int = 5, threshold: 
 
 async def send_daily_visit_report(bot: Bot) -> int:
     """매일 1회(방해금지 종료 후) 관리자에게 방문 리포트 발송. 방문 0명이어도 보냄."""
-    if not bot or _in_quiet_hours() or not config.ADMIN_CHAT_ID:
+    if not bot or not config.ADMIN_CHAT_ID:
         return 0
+    try:
+        if _in_quiet_hours(int(config.ADMIN_CHAT_ID)):   # 관리자 방해금지 존중
+            return 0
+    except ValueError:
+        pass
     today = datetime.date.today().isoformat()
     if db.meta_get("visit_report_date") == today:
         return 0
@@ -225,9 +239,9 @@ async def send_daily_visit_report(bot: Bot) -> int:
 async def notify_new(bot: Bot, campaigns: List[Campaign]) -> int:
     if not campaigns:
         return 0
-    quiet = _in_quiet_hours()
     sent = 0
     for chat_id in db.active_users():
+        quiet = _in_quiet_hours(chat_id)        # 사용자별 방해금지
         f = db.get_all_filters(chat_id)
         for c in campaigns:
             if matches_filter(c, f):

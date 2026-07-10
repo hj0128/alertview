@@ -519,10 +519,13 @@ async def state(request: Request):
             presets.append({"name": p["name"], "payload": json.loads(p["payload"] or "{}")})
         except (ValueError, TypeError):
             pass
+    qs, qe = db.get_quiet(uid)
     return {
         "logged_in": True,
         "active": db.is_active(uid),
         "name": request.session.get("name", ""),
+        "quiet_start": qs, "quiet_end": qe,               # 사용자 설정(없으면 null)
+        "quiet_default": [config.QUIET_START, config.QUIET_END],
         "presets": presets,
         "sites": f["sites"],
         "keywords": f["keywords"],
@@ -722,6 +725,29 @@ async def set_active(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     body = await request.json()
     db.set_active(uid, bool(body.get("active")))
+    return {"ok": True}
+
+
+@app.post("/api/quiet")
+async def set_quiet(request: Request):
+    """방해금지 시간 저장. {enabled, start, end}. enabled=false 면 해제(전역 기본 사용)."""
+    uid = _uid(request)
+    if not uid:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    if not body.get("enabled"):
+        db.set_quiet(uid, None, None)
+        return {"ok": True}
+
+    def _h(v):
+        try:
+            return max(0, min(23, int(v)))
+        except (ValueError, TypeError):
+            return None
+    s, e = _h(body.get("start")), _h(body.get("end"))
+    if s is None or e is None:
+        return JSONResponse({"error": "invalid"}, status_code=400)
+    db.set_quiet(uid, s, e)
     return {"ok": True}
 
 
@@ -1092,6 +1118,15 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   <h2 style="margin:0">알림 받기</h2>
   <label class=switch><input type=checkbox id=active onchange="toggleActive()"><span class=slider></span></label>
 </div><p class=muted>끄면 새 캠페인이 떠도 알림이 오지 않아요.</p></div>
+<div class=card><div class=top>
+  <h2 style="margin:0">방해금지 시간</h2>
+  <label class=switch><input type=checkbox id=quieton onchange="saveQuiet()"><span class=slider></span></label>
+</div>
+<div id=quietrow style="display:none;align-items:center;gap:6px;margin-top:8px">
+  <select id=qstart class=sortsel onchange="saveQuiet()"></select><span>시부터</span>
+  <select id=qend class=sortsel onchange="saveQuiet()"></select><span>시까지</span>
+</div>
+<p class=muted>이 시간엔 알림을 보내지 않고 모아뒀다가, 끝나면 요약 1건으로 보내요. (자정 넘김 가능, 예: 23시~8시)</p></div>
 </div>
 
 <div class=card>
@@ -1509,6 +1544,7 @@ function render(){
     ? '키워드·지역으로 검색해 보세요. 알림으로 받고 싶으면 로그인하세요.'
     : '설정은 자동 저장돼요.';
   document.getElementById('active').checked=!!S.active;
+  renderQuiet();
   renderSites();
   chips('kwchips',S.keywords,delKw);
   opts('categories',S.all_categories,S.categories,toggleCategory);
@@ -1539,6 +1575,22 @@ async function toggleChannel(v){
   if(guest){toggleArr(S.channels,v);refreshLocal();return;}
   await post('/api/channel/toggle',{value:v});await load();}
 async function toggleActive(){await post('/api/active',{active:document.getElementById('active').checked});}
+function _fillHours(sel,val){ if(!sel)return; if(sel.options.length===0){for(let h=0;h<24;h++){const o=document.createElement('option');o.value=h;o.textContent=(h<10?'0'+h:h);sel.appendChild(o);}} sel.value=val; }
+function renderQuiet(){
+  const on=(S.quiet_start!=null&&S.quiet_end!=null);
+  const def=S.quiet_default||[23,8];
+  document.getElementById('quieton').checked=on;
+  document.getElementById('quietrow').style.display=on?'flex':'none';
+  _fillHours(document.getElementById('qstart'), on?S.quiet_start:def[0]);
+  _fillHours(document.getElementById('qend'),   on?S.quiet_end:def[1]);
+}
+async function saveQuiet(){
+  const on=document.getElementById('quieton').checked;
+  document.getElementById('quietrow').style.display=on?'flex':'none';
+  const s=parseInt(document.getElementById('qstart').value,10), e=parseInt(document.getElementById('qend').value,10);
+  S.quiet_start=on?s:null; S.quiet_end=on?e:null;
+  await post('/api/quiet',{enabled:on,start:s,end:e});
+}
 async function saveNum(key,elId){const raw=document.getElementById(elId).value;const v=(raw===''?null:raw);
   if(guest){S[key]=(v===null?null:parseFloat(v));refreshLocal();return;}
   await post('/api/scalar',{key:key,value:v});await load();}

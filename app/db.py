@@ -202,6 +202,8 @@ def _migrate() -> None:
     """기존 DB에 누락된 컬럼을 추가(하위호환)."""
     add = [
         ("users", "seen_until", "seen_until TEXT"),
+        ("users", "quiet_start", "quiet_start INTEGER"),  # 사용자별 방해금지 시작(NULL=전역기본)
+        ("users", "quiet_end", "quiet_end INTEGER"),      # 사용자별 방해금지 종료(NULL=전역기본)
         ("seen", "region", "region TEXT"), ("seen", "category", "category TEXT"),
         ("seen", "channel", "channel TEXT"), ("seen", "dday", "dday INTEGER"),
         ("seen", "applicants", "applicants INTEGER"), ("seen", "recruit", "recruit INTEGER"),
@@ -280,6 +282,24 @@ def is_active(chat_id: int) -> bool:
         row = _c().execute(_q("SELECT active FROM users WHERE chat_id=?"),
                            (chat_id,)).fetchone()
     return bool(row and row["active"])
+
+
+def get_quiet(chat_id: int):
+    """사용자별 방해금지 (start, end). 미설정이면 (None, None)."""
+    with _lock:
+        row = _c().execute(_q("SELECT quiet_start, quiet_end FROM users WHERE chat_id=?"),
+                           (chat_id,)).fetchone()
+    if not row or row["quiet_start"] is None or row["quiet_end"] is None:
+        return (None, None)
+    return (row["quiet_start"], row["quiet_end"])
+
+
+def set_quiet(chat_id: int, start, end) -> None:
+    """방해금지 시간 저장. start/end 가 None 이면 해제(전역 기본 사용)."""
+    with _lock:
+        _c().execute(_q("UPDATE users SET quiet_start=?, quiet_end=? WHERE chat_id=?"),
+                     (start, end, chat_id))
+        _c().commit()
 
 
 def get_seen_until(chat_id: int) -> str:
