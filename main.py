@@ -12,7 +12,7 @@ import logging
 import uvicorn
 from telegram.ext import Application, CommandHandler
 
-from app import config, db, bot
+from app import config, db, bot, notifier
 from app.poller import run_poll
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -42,6 +42,7 @@ def _build_bot() -> Application:
 async def run() -> None:
     db.init(config.DB_PATH)
     application = _build_bot()
+    notifier.set_bot(application.bot)   # 웹 로그인 등에서 신규 가입 알림 보낼 때 사용
     mode = "DEMO" if config.DEMO else "실사이트"
     async def _initial_poll():
         try:

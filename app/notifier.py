@@ -14,6 +14,44 @@ from .matcher import matches_filter
 
 log = logging.getLogger(__name__)
 
+# 웹 핸들러 등 봇 인스턴스를 직접 갖지 않는 곳에서 관리자 알림을 보내기 위한 공유 참조.
+# main.run() 기동 시 set_bot() 으로 채운다.
+_bot: "Bot | None" = None
+
+
+def set_bot(bot: Bot) -> None:
+    global _bot
+    _bot = bot
+
+
+async def notify_admin_new_user(chat_id: int, name: str = "", source: str = "",
+                                bot: "Bot | None" = None) -> bool:
+    """새 사용자가 가입하면 관리자(ADMIN_CHAT_ID)에게 1회 알림.
+    ADMIN_CHAT_ID 미설정·봇 없음·본인(관리자) 가입일 때는 조용히 건너뛴다."""
+    if not config.ADMIN_CHAT_ID:
+        return False
+    b = bot or _bot
+    if b is None:
+        return False
+    try:
+        if int(config.ADMIN_CHAT_ID) == int(chat_id):   # 관리자 본인 가입은 알리지 않음
+            return False
+    except (TypeError, ValueError):
+        pass
+    who = f" {name}" if name else ""
+    src = f"\n경로: {source}" if source else ""
+    text = (f"🎉 <b>새 가입</b>{who}\n"
+            f"chat_id <code>{chat_id}</code>{src}\n"
+            f"누적 사용자 <b>{db.user_count()}</b>명")
+    try:
+        await b.send_message(chat_id=int(config.ADMIN_CHAT_ID), text=text,
+                             parse_mode=ParseMode.HTML)
+        log.info("신규 가입 알림 발송(관리자): chat_id=%s", chat_id)
+        return True
+    except Exception as e:
+        log.warning("신규 가입 알림 실패: %s", e)
+        return False
+
 
 def format_campaign(c: Campaign) -> str:
     bits = []

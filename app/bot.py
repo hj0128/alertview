@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from . import db
+from . import db, notifier
 from .adapters import ALL_ADAPTERS
 
 log = logging.getLogger(__name__)
@@ -28,11 +28,18 @@ HELP = (
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    db.upsert_user(update.effective_chat.id)
+    is_new = db.upsert_user(update.effective_chat.id)
     await update.message.reply_text(
         "✅ 가입 완료! 이제 새 체험단이 뜨면 알려드릴게요.\n\n" + HELP,
         parse_mode=ParseMode.HTML,
     )
+    if is_new:
+        u = update.effective_user
+        await notifier.notify_admin_new_user(
+            update.effective_chat.id,
+            name=(u.full_name if u else ""),
+            source="봇 /start", bot=ctx.bot,
+        )
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

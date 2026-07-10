@@ -254,14 +254,24 @@ def _c():
 # --------------------------------------------------------------------------- #
 # 사용자
 # --------------------------------------------------------------------------- #
-def upsert_user(chat_id: int) -> None:
+def upsert_user(chat_id: int) -> bool:
+    """사용자 등록/재활성화. 처음 보는 chat_id를 새로 추가했으면 True, 기존 사용자면 False."""
     with _lock:
+        existing = _c().execute(_q("SELECT 1 FROM users WHERE chat_id=?"),
+                                (chat_id,)).fetchone()
         _c().execute(_q(
             "INSERT INTO users(chat_id, active, created_at, seen_until) VALUES(?,1,?,?) "
             "ON CONFLICT(chat_id) DO UPDATE SET active=1"),
             (chat_id, _now(), _now()),
         )
         _c().commit()
+    return existing is None
+
+
+def user_count() -> int:
+    with _lock:
+        row = _c().execute("SELECT COUNT(*) AS n FROM users").fetchone()
+    return int(row["n"]) if row else 0
 
 
 def set_active(chat_id: int, active: bool) -> None:

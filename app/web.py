@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import db, config
+from . import db, config, notifier
 from .matcher import matches_filter, category_of
 from .adapters import ALL_ADAPTERS
 from .adapters.base import Campaign
@@ -466,9 +466,13 @@ async def auth(request: Request):
     if not verify_telegram_auth(params):
         return HTMLResponse("<h3>로그인 검증 실패</h3><a href='/'>돌아가기</a>", status_code=401)
     chat_id = int(params["id"])
-    db.upsert_user(chat_id)
+    is_new = db.upsert_user(chat_id)
     request.session["uid"] = chat_id
     request.session["name"] = params.get("first_name", "")
+    if is_new:
+        name = " ".join(x for x in (params.get("first_name", ""),
+                                    params.get("last_name", "")) if x).strip()
+        await notifier.notify_admin_new_user(chat_id, name=name, source="웹 로그인")
     return RedirectResponse("/", status_code=303)
 
 
