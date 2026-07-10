@@ -242,7 +242,7 @@ _MAP_HEAD = """<!doctype html><html lang=ko><head><meta charset=utf-8>
   box-shadow:0 2px 8px rgba(0,0,0,.35);border:3px solid #fff}
 .cmark .b.clus{background:#f06418}</style></head><body>
 <div id=bar><b>🗺 체험단 지도</b><span style="color:#888;font-size:13px" id=hint>불러오는 중…</span>
-<span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#f08c00"></i>포장</span><span class=legchip data-cat="기타"><i style="background:#868e96"></i>기타</span></span>
+<span id=leg><span class=legchip data-cat="맛집"><i style="background:#e4572e"></i>맛집</span><span class=legchip data-cat="여가"><i style="background:#2e9e5b"></i>여가</span><span class=legchip data-cat="뷰티"><i style="background:#d6336c"></i>뷰티</span><span class=legchip data-cat="포장"><i style="background:#15aabf"></i>포장</span><span class=legchip data-cat="기타"><i style="background:#868e96"></i>기타</span></span>
 __MINE_BTN__<a href="/">← 피드로</a></div>
 <div id=map></div>
 """
@@ -252,7 +252,7 @@ _KAKAO_MAP_HTML = _MAP_HEAD + """
 <script src="//dapi.kakao.com/v2/maps/sdk.js?appkey=__KAKAO_JS_KEY__&libraries=clusterer&autoload=false"></script>
 <script>
 function _diag(msg){var h=document.getElementById('hint'); if(h) h.textContent=String(msg).slice(0,140);}
-const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
+const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#15aabf','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function popupHtml(p){                                   // 가게 1개 = 채널별 캠페인 목록
   var lines='';
@@ -332,7 +332,7 @@ _LEAFLET_MAP_HTML = ("""<!doctype html><html lang=ko><head><meta charset=utf-8>
 const map=L.map('map',{scrollWheelZoom:true}).setView([36.4,127.9],7);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {maxZoom:19,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
-const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#f08c00','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
+const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#15aabf','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function pin(cat){const col=CATC[cat]||'#3b6ef6';
   return L.divIcon({className:'cmark',iconSize:[26,34],iconAnchor:[13,33],popupAnchor:[0,-30],
