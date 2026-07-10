@@ -40,8 +40,10 @@ async def notify_admin_new_user(chat_id: int, name: str = "", source: str = "",
         pass
     who = f" {name}" if name else ""
     src = f"\n경로: {source}" if source else ""
+    when = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")   # 컨테이너 TZ=KST
     text = (f"🎉 <b>새 가입</b>{who}\n"
             f"chat_id <code>{chat_id}</code>{src}\n"
+            f"가입 시각: {when}\n"
             f"누적 사용자 <b>{db.user_count()}</b>명")
     try:
         await b.send_message(chat_id=int(config.ADMIN_CHAT_ID), text=text,

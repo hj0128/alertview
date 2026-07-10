@@ -17,6 +17,8 @@ from .region_norm import normalize_offline
 
 log = logging.getLogger(__name__)
 
+_FULL_REFRESH_INTERVAL = 6 * 3600     # 6시간마다 전체 재크롤(신청자·경쟁률 등 변동값 최신화)
+
 
 async def collect_new(demo: bool) -> List[Campaign]:
     """페이지가 들어오는 즉시 DB 저장(점진적 표시).
@@ -24,6 +26,15 @@ async def collect_new(demo: bool) -> List[Campaign]:
     증분 모드(새 캠페인 없는 페이지에서 조기 종료, 신규는 알림). 백필이 중간에 끊기면
     (앱 재시작/요청 오류 등) 완료 플래그가 안 찍혀 다음 수집에서 다시 전체 크롤 → 구멍 자가 치유."""
     new_items: List[Campaign] = []
+    # 6시간마다 한 번은 조기종료 없이 전 페이지를 끝까지 긁어, 이미 본 캠페인의 신청자/경쟁률도 갱신.
+    # (평소 증분 모드는 신규 없는 페이지에서 멈추므로 뒤쪽 캠페인 변동값이 안 바뀌던 문제 보완)
+    last_refresh = db.meta_get("last_full_refresh")
+    do_refresh = True
+    if last_refresh:
+        try:
+            do_refresh = (time.time() - float(last_refresh)) >= _FULL_REFRESH_INTERVAL
+        except ValueError:
+            do_refresh = True
     async with httpx.AsyncClient(follow_redirects=True, trust_env=False) as client:
         for ad in active_adapters(demo):
             # 별도 수집주기가 설정된 어댑터(min_interval)는 주기가 안 됐으면 건너뜀(기존 데이터 유지).
@@ -37,10 +48,12 @@ async def collect_new(demo: bool) -> List[Campaign]:
                     except ValueError:
                         pass
             deep = not db.backfill_done(ad.key)   # 백필 미완료면 전체 크롤(알림 억제)
+            crawl_all = deep or do_refresh         # 초기백필 or 6h 정기 새로고침 → 끝까지 크롤
             stats = {"fresh": 0}
             seen_cids = set()                      # 이번 수집에서 본 cid(자동 정리용)
 
-            def on_page(items, ad=ad, deep=deep, stats=stats, seen_cids=seen_cids) -> bool:
+            def on_page(items, ad=ad, deep=deep, crawl_all=crawl_all,
+                        stats=stats, seen_cids=seen_cids) -> bool:
                 db_new = 0
                 for c in items:
                     seen = db.is_seen(c.site, c.cid)
@@ -50,9 +63,10 @@ async def collect_new(demo: bool) -> List[Campaign]:
                         continue                   # 이미 본 건: 갱신만 하고 신규 카운트 제외
                     stats["fresh"] += 1
                     db_new += 1
-                    if not deep:
+                    if not deep:                   # 정기 새로고침(crawl_all)에서도 신규 알림은 유지
                         new_items.append(c)
-                return True if deep else (db_new > 0)
+                # 끝까지 크롤: 초기백필·정기새로고침. 그 외 증분: 신규 없는 페이지에서 조기종료.
+                return True if crawl_all else (db_new > 0)
 
             try:
                 await ad.fetch(client, on_page=on_page)
@@ -78,6 +92,9 @@ async def collect_new(demo: bool) -> List[Campaign]:
             log.info("[%s] 신규 %d건%s", ad.key, stats["fresh"],
                      " (전체 백필: 알림생략)" if deep else "")
             _prune_unseen(ad, seen_cids)           # 소스에서 내려간 활성 캠페인 자동 삭제
+    if do_refresh:
+        db.meta_set("last_full_refresh", str(time.time()))   # 다음 전체 새로고침은 6h 뒤
+        log.info("전체 새로고침 수행(신청자/경쟁률 등 변동값 최신화)")
     return new_items
 
 
