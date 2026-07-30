@@ -117,6 +117,10 @@ def _parse(html: str, default_cat: str = "") -> List[Campaign]:
             image = (img_el.get("src") or img_el.get("data-src") or "").strip()
             if image.startswith("//"):
                 image = "https:" + image
+            # 미블은 썸네일을 http:// 로 내려줌 → HTTPS 페이지에서 혼합콘텐츠로 차단됨.
+            # storage.mrblog.net 은 https 도 정상 응답하므로 승격.
+            elif image.startswith("http://"):
+                image = "https://" + image[7:]
 
         short_desc = (desc[:40] + "…") if len(desc) > 41 else desc
         title = (f"[{region}] " if region else "") + subject + (f" {short_desc}" if short_desc else "")

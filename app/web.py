@@ -1374,6 +1374,9 @@ function appendFeed(arr){
       (pills?'<div class=pills>'+pills+'</div>':'')+'</div>';
     if(c.image){
       const img=document.createElement('img'); img.className='thumb'; img.loading='lazy';
+      // 디너의여왕 CDN(dq-files.gcdn.ntruss.com)은 외부 Referer 를 403 으로 차단(핫링크 방지).
+      // Referer 를 아예 안 보내면 통과 → 전 사이트 이미지 확인 결과 모두 정상(200)이라 일괄 적용.
+      img.referrerPolicy='no-referrer';   // src 지정 전에 설정해야 적용됨
       img.addEventListener('error',()=>{img.replaceWith(makePh());});
       img.src=c.image;
       const ph=a.querySelector('.thumb.ph'); if(ph) ph.replaceWith(img);
