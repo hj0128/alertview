@@ -810,6 +810,7 @@ async def campaigns(request: Request, response: Response):
     if sort not in ("recent", "remaining", "deadline", "competition"):
         sort = "recent"
     fav_only = request.query_params.get("fav") == "1" and not guest
+    hide_read = request.query_params.get("unread") == "1"   # 읽은것 제외(클릭·모두읽음 처리분 숨김)
     q = request.query_params.get("q", "").strip().lower()   # 검색어(제목·지역)
     merge = request.query_params.get("merge", "1") != "0"   # 중복 병합(기본 ON)
 
@@ -865,6 +866,8 @@ async def campaigns(request: Request, response: Response):
     if fav_only:
         # 찜만 보기: 사이드바 필터와 무관하게 '내가 담은 것 전부'(마감 지난 것도 포함).
         matched = [_to_dict(r) for r in db.favorites_rows(uid) if _q_ok(r)]
+        if hide_read:
+            matched = [d for d in matched if not d["is_viewed"]]
         _sort(matched)
         if merge:
             matched = _collapse(matched)
@@ -876,8 +879,9 @@ async def campaigns(request: Request, response: Response):
     has_filter = bool(f.get("sites") or f["keywords"] or f["regions"] or f["categories"]
                       or f["channels"] or any(f.get(k) is not None for k in NUMERIC_FILTERS))
 
-    if not has_filter and not q and not merge:
+    if not has_filter and not q and not merge and not hide_read:
         # 조건 없음 → DB 에서 총개수/페이지만 조회(전체 스캔 불필요, 상한 없음)
+        # 읽음 여부는 사용자별 viewed 라 DB 페이지네이션으로 못 걸러 → 아래 전체 스캔 경로로.
         total = db.count_seen()
         new_count = db.count_seen_new(new_cutoff)
         page = [_to_dict(r) for r in db.list_page(offset, limit, sort)]
@@ -893,6 +897,8 @@ async def campaigns(request: Request, response: Response):
     matched, new_count = [], 0
     for r in db.list_active(sites=f.get("sites") or None):
         if not _q_ok(r):
+            continue
+        if hide_read and (r["site"], r["cid"]) in viewed:
             continue
         if need_match:
             c = Campaign(
@@ -1081,6 +1087,8 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
  .badge{position:absolute;top:7px;left:7px;background:#ff3b30;color:#fff;font-size:9.5px;font-weight:800;letter-spacing:.02em;border-radius:7px;padding:3px 7px;z-index:1;box-shadow:0 2px 6px rgba(255,59,48,.4)}
  .seenbtn{background:#eef3ff;color:#2f4d9e;padding:8px 13px;font-weight:600}
  .seenbtn:hover{background:#e0e9ff}
+ .seenbtn.on{background:var(--blue);color:#fff;box-shadow:inset 0 1px 2px rgba(0,0,0,.18)}
+ .seenbtn.on:hover{background:var(--blue-d)}
  .feedctl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
  .sortsel{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-sm);font-size:13px;background:#fff;color:var(--ink2);cursor:pointer}
  #favtgl.on{background:#ffe3e6;color:#e0354b}
@@ -1214,6 +1222,7 @@ _APP_HTML = """<!doctype html><html lang=ko><head><meta charset=utf-8>
         <option value=competition>경쟁률↓</option>
       </select>
       <button id=mergetgl class="seenbtn on" onclick="toggleMerge()" title="같은 업체 중복(채널변형 등) 묶기">🔁 병합</button>
+      <button id=unreadtgl class=seenbtn onclick="toggleUnread()" title="이미 읽은(클릭한) 캠페인 숨기기">👀 읽은것 제외</button>
       <button id=favtgl class=seenbtn onclick="toggleFavOnly()" style="display:none">♡ 찜</button>
       <button class=seenbtn onclick="seenAll()">모두 읽음</button>
     </div></div>
@@ -1248,6 +1257,8 @@ async function load(){
   const u=new URLSearchParams(location.search);          // URL 로 정렬·찜 지정 가능(공유/북마크)
   if(['recent','remaining','deadline','competition'].includes(u.get('sort'))) feedSort=u.get('sort');
   favOnly=(u.get('fav')==='1') && !guest;
+  hideRead=(u.get('unread')==='1');
+  paintUnread();
   const uq=u.get('q'); if(uq){ searchQ=uq; const sb=document.getElementById('searchbox'); if(sb) sb.value=uq; }  // ?q= 검색 진입
   const only=u.get('only');   // 지도에서 지역 클릭: 다른 필터 전부 초기화하고 그 지역만
   if(only){
@@ -1283,6 +1294,7 @@ function feedParams(){
   }
   p.set('sort',feedSort);
   if(favOnly)p.set('fav','1');
+  if(hideRead)p.set('unread','1');
   if(searchQ)p.set('q',searchQ);
   if(!mergeOn)p.set('merge','0');
   return p;
@@ -1291,6 +1303,14 @@ let searchQ='';
 function doSearch(){ searchQ=(document.getElementById('searchbox').value||'').trim(); loadCampaigns(true); }
 let mergeOn=true;
 function toggleMerge(){ mergeOn=!mergeOn; document.getElementById('mergetgl').classList.toggle('on',mergeOn); loadCampaigns(true); }
+let hideRead=false;      // 읽은것 제외 토글
+function paintUnread(){   // 켜짐 여부를 색 + 라벨로 표시
+  const b=document.getElementById('unreadtgl'); if(!b) return;
+  b.classList.toggle('on',hideRead);
+  b.textContent=hideRead?'✅ 읽은것 제외중':'👀 읽은것 제외';
+  b.setAttribute('aria-pressed',hideRead?'true':'false');
+}
+function toggleUnread(){ hideRead=!hideRead; paintUnread(); loadCampaigns(true); }
 function resetAll(){ searchQ=''; const s=document.getElementById('searchbox'); if(s)s.value=''; clearAll(); }
 function changeSort(){ feedSort=document.getElementById('sortsel').value; loadCampaigns(true); }
 function toggleFavOnly(){
@@ -1319,6 +1339,10 @@ async function loadCampaigns(reset=true){
   appendFeed(d.campaigns);
   feedOffset+=d.campaigns.length;
   feedDone=!d.has_more;
+  if(hideRead && d.campaigns.length && !feedDone
+     && !document.getElementById('feed').children.length){
+    feedLoading=false; return loadCampaigns(false);   // 이번 페이지가 전부 읽음 → 다음 페이지 이어서
+  }
   if(reset && !d.campaigns.length){
     document.getElementById('feed').innerHTML=
       '<div class=muted style="grid-column:1/-1;text-align:center;padding:36px 12px;line-height:1.7">'+
@@ -1333,6 +1357,8 @@ function appendFeed(arr){
   const f=document.getElementById('feed');
   arr.forEach(c=>{
     loadedKeys.add(vkey(c.site,c.cid));
+    // 이번 세션에 읽은 것(게스트는 서버에 기록이 없어 이 경로로만 걸러짐)
+    if(hideRead && (c.is_viewed||viewedLocal.has(vkey(c.site,c.cid)))) return;
     const a=document.createElement('a'); a.className='item'+((c.is_viewed||viewedLocal.has(vkey(c.site,c.cid)))?' viewed':'');
     a.href=c.url; a.target='_blank'; a.rel='noopener';
     const meta=[c.region,c.category,c.channel].filter(Boolean).join(' \u00b7 ');
@@ -1373,6 +1399,7 @@ async function seenAll(){
   if(!guest) await fetch('/api/seen-all',{method:'POST'});   // 로그인 시 서버에도 저장
   loadedKeys.forEach(k=>viewedLocal.add(k));                  // 게스트 포함: 현재 목록 읽음 처리
   document.querySelectorAll('#feed .item').forEach(el=>el.classList.add('viewed'));
+  if(hideRead) loadCampaigns(true);   // 읽은것 제외 중이면 방금 읽은 것들 즉시 목록에서 빠지게
 }
 function showNew(){
   document.getElementById('newbanner').style.display='none';
