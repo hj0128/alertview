@@ -2,6 +2,10 @@
 import asyncio, os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# DATABASE_URL 이 설정돼 있으면 db 가 그쪽(운영 PostgreSQL)을 쓴다.
+# docker compose exec 로 돌리면 컨테이너 환경변수가 상속되므로 반드시 비운다.
+os.environ["DATABASE_URL"] = ""
+
 from bs4 import BeautifulSoup
 from app.adapters.dinnerqueen import DinnerQueenAdapter
 from app.adapters.base import Campaign

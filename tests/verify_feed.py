@@ -1,8 +1,12 @@
 """캠페인 피드 검증: 필터 + 읽음(클릭) + NEW(오늘) + 페이지네이션."""
 import os, tempfile, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.update({"TELEGRAM_BOT_TOKEN":"1:A","TELEGRAM_BOT_USERNAME":"b","WEB_SECRET":"s",
-  "DB_PATH":tempfile.mktemp(suffix=".db"),"WEB_DEV_LOGIN":"1","WEB_DEV_CHATID":"42"})
+os.environ.update({
+    # DATABASE_URL 이 설정돼 있으면 그쪽이 우선이라 테스트가 운영 DB 를 건드린다.
+    # (docker compose exec 로 돌리면 컨테이너 환경변수가 상속됨) -> 반드시 비운다.
+    "DATABASE_URL": "",
+"TELEGRAM_BOT_TOKEN":"1:A","TELEGRAM_BOT_USERNAME":"b","WEB_SECRET":"s",
+  "DB_PATH":tempfile.mktemp(suffix=".db"),"WEB_DEV_LOGIN":"1","WEB_DEV_CHATID":"42","DEMO":"1","WEB_COOKIE_SECURE":"0"})
 from app import db, config; db.init(config.DB_PATH)
 from app.adapters.base import Campaign
 from app import web
@@ -21,7 +25,7 @@ ck("오늘 수집분 전부 NEW", d["new_count"]==3)
 ck("처음엔 전부 안읽음", all(not x["is_viewed"] for x in d["campaigns"]))
 
 c.post("/api/category/toggle",json={"value":"맛집"})
-ck("맛집 필터 2건", c.get("/api/campaigns").json()["total"]==2)
+ck("맛집 필터 3건(카페는 맛집으로 매핑)", c.get("/api/campaigns").json()["total"]==3)
 c.post("/api/scalar",json={"key":"max_competition","value":1})
 ck("경쟁률≤1 적용 2건", c.get("/api/campaigns").json()["total"]==2)
 

@@ -4,9 +4,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 DUMMY = "123456:TESTTOKENabcdef"
 os.environ.update({
+    # DATABASE_URL 이 설정돼 있으면 그쪽이 우선이라 테스트가 운영 DB 를 건드린다.
+    # (docker compose exec 로 돌리면 컨테이너 환경변수가 상속됨) -> 반드시 비운다.
+    "DATABASE_URL": "",
+
     "TELEGRAM_BOT_TOKEN": DUMMY, "TELEGRAM_BOT_USERNAME": "test_bot",
     "WEB_SECRET": "test-secret", "DB_PATH": tempfile.mktemp(suffix=".db"),
     "WEB_DEV_LOGIN": "1", "WEB_DEV_CHATID": "777",
+    # TestClient 는 소켓주소가 "testclient" 라 로컬 판정이 안 됨 →
+    # dev-login 의 또 다른 허용 조건인 DEMO 모드로 연다.
+    "DEMO": "1",
+    # TestClient 는 http://testserver 로 요청 → Secure 쿠키는 전송되지 않는다.
+    "WEB_COOKIE_SECURE": "0",
 })
 from app import db, config
 db.init(config.DB_PATH)
@@ -29,7 +38,8 @@ check("위조 해시 거부", not web.verify_telegram_auth(bad))
 
 print("[2] API 흐름 (텔레그램 로그인)")
 c=TestClient(web.app)
-check("미로그인 401", c.get("/api/state").status_code==401)
+_g=c.get("/api/state")   # 비로그인도 검색 가능(게스트) → 200 + logged_in False
+check("미로그인 게스트 응답", _g.status_code==200 and _g.json()["logged_in"] is False)
 check("로그인 303", c.get("/auth", params=good, follow_redirects=False).status_code==303)
 c.post("/api/keyword/add", json={"value":"횡성"})
 c.post("/api/region/toggle", json={"value":"강원"})
