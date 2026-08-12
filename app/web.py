@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import time
@@ -444,10 +445,28 @@ def _collapse(items: list) -> list:
     return out
 
 
+def _is_local_client(request: Request) -> bool:
+    """요청이 서버 자신/사설망(LAN)에서 온 것인지. 인증 우회 방지가 목적이므로
+    위조 가능한 X-Forwarded-For 는 절대 보지 않고 실제 소켓 주소만 신뢰한다.
+    (도커 포트포워딩은 DNAT 이라 외부 요청엔 진짜 공인 IP 가 찍히고,
+     호스트 PC 에서 온 요청만 브리지 게이트웨이인 172.x.0.1 로 보인다.)"""
+    host = request.client.host if request.client else ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
 @app.get("/dev-login")
 async def dev_login(request: Request):
-    """로컬 테스트 전용: 텔레그램 로그인 없이 세션 생성. WEB_DEV_LOGIN=1 일 때만."""
-    if not config.WEB_DEV_LOGIN:
+    """로컬 테스트 전용: 텔레그램 로그인 없이 세션 생성.
+
+    WEB_DEV_LOGIN=1 이면서 (DEMO 모드 또는 로컬/사설망 요청)일 때만 동작.
+    이 경로는 텔레그램 서명 검증을 건너뛰므로 열려 있으면 누구나 임의 chat_id
+    (관리자 포함)로 로그인할 수 있다 → 인터넷에 노출되지 않도록 이중 차단.
+    """
+    if not config.WEB_DEV_LOGIN or not (config.DEMO or _is_local_client(request)):
         return HTMLResponse("dev login disabled", status_code=404)
     raw = request.query_params.get("id") or config.WEB_DEV_CHATID or "999999999"
     try:

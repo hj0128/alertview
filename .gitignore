@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 .env
+# .env.bak / .env.local 등 사본도 전부 차단(예시 파일만 예외)
+.env.*
+!.env.example
 *.db
 *.db-wal
 *.db-shm
