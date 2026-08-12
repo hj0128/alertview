@@ -32,6 +32,9 @@ SEND_GAP = float(os.getenv("SEND_GAP", "0.05"))
 WEB_ENABLED = os.getenv("WEB_ENABLED", "1").strip() in ("1", "true", "True")
 WEB_PORT = int(os.getenv("WEB_PORT", os.getenv("PORT", "8000")))
 WEB_SECRET = os.getenv("WEB_SECRET", "change-me-please-" + (BOT_TOKEN[-8:] or "dev"))
+# 세션 쿠키에 Secure 플래그를 붙일지. HTTPS 로 서비스하면 1(기본).
+# 순수 HTTP 로 로컬 테스트할 때만 0 으로 두면 로그인 세션이 유지된다.
+WEB_COOKIE_SECURE = os.getenv("WEB_COOKIE_SECURE", "1").strip() in ("1", "true", "True")
 
 # --- 로컬 테스트용 개발 로그인 (텔레그램 로그인 건너뜀). 운영에선 0/미설정 ---
 WEB_DEV_LOGIN = os.getenv("WEB_DEV_LOGIN", "0").strip() in ("1", "true", "True")

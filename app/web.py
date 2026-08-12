@@ -34,7 +34,29 @@ NUMERIC_FILTERS = ("min_competition", "max_competition", "min_dday", "max_dday",
                    "min_recruit", "max_recruit", "min_applicants", "max_applicants")
 
 app = FastAPI(title="체험단 알림 설정")
-app.add_middleware(SessionMiddleware, secret_key=config.WEB_SECRET, max_age=60 * 60 * 24 * 30)
+# https_only: 세션 쿠키에 Secure 플래그 → HTTP 로 접속했을 땐 쿠키가 전송되지 않는다.
+# 운영은 Cloudflare Tunnel 로 HTTPS 종단이라 기본 켬. 순수 HTTP 로 띄워 테스트할 땐
+# WEB_COOKIE_SECURE=0 으로 끌 수 있다.
+app.add_middleware(SessionMiddleware, secret_key=config.WEB_SECRET,
+                   max_age=60 * 60 * 24 * 30, https_only=config.WEB_COOKIE_SECURE,
+                   same_site="lax")
+
+
+# 보안 응답 헤더. CSP 는 인라인 스크립트/스타일을 전면적으로 쓰고 있어 지금 넣으면
+# 화면이 깨지므로 제외했다(추후 nonce 도입 시 추가).
+_SEC_HEADERS = {
+    "X-Content-Type-Options": "nosniff",       # MIME 스니핑 차단
+    "X-Frame-Options": "SAMEORIGIN",           # 클릭재킹(외부 iframe 삽입) 차단
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for k, v in _SEC_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
 
 
 @app.middleware("http")
@@ -158,8 +180,32 @@ async function send(){{
 </script></body></html>""", headers={"Cache-Control": "no-store"})
 
 
+# 문의는 비로그인도 보낼 수 있어 스팸에 열려 있다 → IP 당 시간창 제한(메모리, 베스트에포트).
+_INQ_WINDOW, _INQ_MAX = 600, 5          # 10분에 5건
+_inq_hits: dict = {}
+
+
+def _inquiry_allowed(ip: str) -> bool:
+    now = time.time()
+    if len(_inq_hits) > 5000:           # 메모리 무한증가 방지: 오래된 항목 청소
+        for k, v in list(_inq_hits.items()):
+            if not [t for t in v if now - t < _INQ_WINDOW]:
+                _inq_hits.pop(k, None)
+    hits = [t for t in _inq_hits.get(ip, []) if now - t < _INQ_WINDOW]
+    if len(hits) >= _INQ_MAX:
+        _inq_hits[ip] = hits
+        return False
+    hits.append(now)
+    _inq_hits[ip] = hits
+    return True
+
+
 @app.post("/api/inquiry")
 async def api_inquiry(request: Request):
+    xff = request.headers.get("x-forwarded-for", "")
+    ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "")
+    if not _inquiry_allowed(ip):
+        return JSONResponse({"ok": False, "error": "too_many"}, status_code=429)
     try:
         b = await request.json()
     except Exception:
@@ -255,12 +301,13 @@ _KAKAO_MAP_HTML = _MAP_HEAD + """
 function _diag(msg){var h=document.getElementById('hint'); if(h) h.textContent=String(msg).slice(0,140);}
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#15aabf','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function safeUrl(u){return /^https?:\/\//i.test(u||'')?u:'#';}   // 외부 스킴(javascript: 등) 차단
 function popupHtml(p){                                   // 가게 1개 = 채널별 캠페인 목록
   var lines='';
   (p.items||[]).forEach(function(it){
     var dd=(it.dday==null)?'':(it.dday===0?'오늘마감':'D-'+it.dday);
     var label=(it.channel?'['+esc(it.channel)+'] ':'')+esc(it.site)+(dd?' · '+dd:'');
-    lines+='<div style="margin-top:5px"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+label+' →</a></div>';
+    lines+='<div style="margin-top:5px"><a href="'+esc(safeUrl(it.url))+'" target="_blank" rel="noopener">'+label+' →</a></div>';
   });
   return '<div style="width:230px;box-sizing:border-box;padding:10px 26px 11px 12px;'
     +'font-size:13px;line-height:1.5;word-break:break-word;white-space:normal">'
@@ -335,6 +382,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {maxZoom:19,subdomains:'abcd',attribution:'© OpenStreetMap © CARTO'}).addTo(map);
 const CATC={'맛집':'#e4572e','여가':'#2e9e5b','뷰티':'#d6336c','배송':'#7048e8','포장':'#15aabf','페이백':'#1c7ed6','기자단':'#495057','기타':'#868e96'};
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function safeUrl(u){return /^https?:\/\//i.test(u||'')?u:'#';}   // 외부 스킴(javascript: 등) 차단
 function pin(cat){const col=CATC[cat]||'#3b6ef6';
   return L.divIcon({className:'cmark',iconSize:[26,34],iconAnchor:[13,33],popupAnchor:[0,-30],
     html:'<svg width=26 height=34 viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">'
@@ -349,7 +397,7 @@ function popupHtml(p){
   (p.items||[]).forEach(function(it){
     var dd=(it.dday==null)?'':(it.dday===0?'오늘마감':'D-'+it.dday);
     var label=(it.channel?'['+esc(it.channel)+'] ':'')+esc(it.site)+(dd?' · '+dd:'');
-    lines+='<div style="margin-top:5px"><a href="'+esc(it.url)+'" target="_blank" rel="noopener">'+label+' →</a></div>';
+    lines+='<div style="margin-top:5px"><a href="'+esc(safeUrl(it.url))+'" target="_blank" rel="noopener">'+label+' →</a></div>';
   });
   return '<b>'+esc(p.name)+'</b><br><span style="color:#666">'+esc(p.region)+'</span>'
     +' · <span style="color:#888;font-size:12px">'+esc(p.category)+(p.count>1?' · '+p.count+'건':'')+'</span>'+lines;
@@ -445,11 +493,23 @@ def _collapse(items: list) -> list:
     return out
 
 
+# 프록시를 거쳐 들어온 요청임을 드러내는 헤더들. 공격자가 값을 위조해 '추가'할 수는
+# 있어도, Cloudflare 가 붙이는 이 헤더를 '제거'할 수는 없다. 따라서 "헤더가 없을 것"을
+# 조건으로 쓰는 것은 안전하다(있으면 무조건 외부로 간주).
+_PROXY_HEADERS = ("x-forwarded-for", "cf-connecting-ip", "x-real-ip", "forwarded")
+
+
 def _is_local_client(request: Request) -> bool:
-    """요청이 서버 자신/사설망(LAN)에서 온 것인지. 인증 우회 방지가 목적이므로
-    위조 가능한 X-Forwarded-For 는 절대 보지 않고 실제 소켓 주소만 신뢰한다.
-    (도커 포트포워딩은 DNAT 이라 외부 요청엔 진짜 공인 IP 가 찍히고,
-     호스트 PC 에서 온 요청만 브리지 게이트웨이인 172.x.0.1 로 보인다.)"""
+    """요청이 서버 자신에서 직접 온 것인지.
+
+    이 서비스는 Cloudflare Tunnel(cloudflared) 뒤에 있어서, 외부 요청도 터널이
+    호스트에서 컨테이너로 재접속하는 형태라 소켓 주소가 사설망(172.x.0.1)으로 보인다.
+    즉 소켓 주소만으로는 내부/외부를 구분할 수 없다. 그래서 두 조건을 모두 요구한다.
+      1) 소켓 주소가 루프백/사설망
+      2) 프록시 경유 헤더가 하나도 없을 것  ← 터널을 통과한 요청은 반드시 붙는다
+    """
+    if any(h in request.headers for h in _PROXY_HEADERS):
+        return False
     host = request.client.host if request.client else ""
     try:
         ip = ipaddress.ip_address(host)
@@ -1371,7 +1431,10 @@ async function loadCampaigns(reset=true){
   }
   feedLoading=false;
 }
-function esc(s){return (s||'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));}
+function esc(s){return (s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+// 캠페인 URL 은 외부 사이트에서 긁어온 값 → javascript: 같은 스킴이 섞여 들어오면
+// 클릭 시 스크립트가 실행된다. http(s) 만 통과시킨다.
+function safeUrl(u){return /^https?:\/\//i.test(u||'')?u:'#';}
 function appendFeed(arr){
   const f=document.getElementById('feed');
   arr.forEach(c=>{
@@ -1379,7 +1442,7 @@ function appendFeed(arr){
     // 이번 세션에 읽은 것(게스트는 서버에 기록이 없어 이 경로로만 걸러짐)
     if(hideRead && (c.is_viewed||viewedLocal.has(vkey(c.site,c.cid)))) return;
     const a=document.createElement('a'); a.className='item'+((c.is_viewed||viewedLocal.has(vkey(c.site,c.cid)))?' viewed':'');
-    a.href=c.url; a.target='_blank'; a.rel='noopener';
+    a.href=safeUrl(c.url); a.target='_blank'; a.rel='noopener';
     const meta=[c.region,c.category,c.channel].filter(Boolean).join(' \u00b7 ');
     let pills='';
     if(c.site_name) pills+='<span class="pill site">'+esc(c.site_name)+'</span>';

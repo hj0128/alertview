@@ -31,8 +31,11 @@ services:
       # 앱 로컬시각=한국시간(KST). 방해금지(QUIET)·마감일 계산·타임스탬프가 KST 기준이 됨.
       # (미설정 시 UTC 라 방해금지 23~8 이 실제론 KST 08~17 로 밀렸었음)
       TZ: Asia/Seoul
+    # 외부 공개는 Cloudflare Tunnel(cloudflared → localhost:8000)이 담당하므로
+    # 127.0.0.1 에만 바인딩한다. 0.0.0.0 이면 같은 네트워크에서 터널을 우회해
+    # 직접 접근할 수 있고, 그 경로엔 Cloudflare 의 보호가 적용되지 않는다.
     ports:
-      - "${HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${HOST_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
