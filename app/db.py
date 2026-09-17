@@ -868,16 +868,28 @@ def place_geo_set(site: str, cid: str, lat, lng, place: str = "", addr: str = ""
 
 
 def places_missing_geo(limit: int = 40) -> list:
-    """정밀 좌표가 아직 없는 활성 방문형 캠페인(제목·지역으로 지오코딩 대상)."""
+    """정밀 좌표가 아직 없는 활성 방문형 캠페인(제목·지역으로 지오코딩 대상). deadline 포함
+    → 호출측에서 마감이 먼(오래 남은) 캠페인을 우선 처리해 API 호출당 지도 노출 기간을 늘릴 수 있다."""
     cats = ",".join("?" for _ in _PLACE_CATS)
     with _lock:
         rows = _c().execute(_q(
-            "SELECT s.site, s.cid, s.title, s.region, s.region_raw FROM seen s "
+            "SELECT s.site, s.cid, s.title, s.region, s.region_raw, s.deadline FROM seen s "
             f"WHERE s.category IN ({cats}) AND s.region<>'' AND s.region<>'전국' "
             f"AND ({_ACTIVE}) "
             "AND NOT EXISTS (SELECT 1 FROM place_geo p WHERE p.site=s.site AND p.cid=s.cid) "
             "LIMIT ?"),
             (*_PLACE_CATS, _today(), limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def known_place_geo() -> list:
+    """이미 좌표를 확보한 캠페인들의 (제목,지역,좌표). 같은 업체가 여러 사이트에 중복 노출될 때
+    (체험단 업계 특성상 흔함) 재조회 없이 좌표를 재사용해 카카오 호출을 아끼기 위한 참조용."""
+    with _lock:
+        rows = _c().execute(_q(
+            "SELECT s.title AS title, s.region AS region, p.lat AS lat, p.lng AS lng, "
+            "p.place AS place, p.addr AS addr FROM seen s "
+            "JOIN place_geo p ON p.site=s.site AND p.cid=s.cid WHERE p.lat IS NOT NULL")).fetchall()
     return [dict(r) for r in rows]
 
 

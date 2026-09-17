@@ -1,6 +1,7 @@
 """주기적 수집 → (페이지 단위 즉시 저장) 신규 감지 → 알림."""
 from __future__ import annotations
 import asyncio
+import datetime
 import logging
 import re
 import time
@@ -293,6 +294,9 @@ def _clean_venue(title: str) -> str:
     return " ".join(out)[:30]
 
 
+_venue_key = _clean_venue   # 재사용 캐시 키(다른 사이트에 이미 있는 좌표를 찾을 때도 같은 정제 규칙 사용)
+
+
 def _venue_queries(title: str, region: str = "") -> list:
     """느슨한 순서의 후보 질의. 흔한 상호(서정·탁주 등)는 지역을 붙여야 잡히므로
     '핵심어절+지역'을 먼저, 그다음 업체명만. 결과는 다시 시/도로 검증한다."""
@@ -344,22 +348,64 @@ async def _geocode_campaign(client, headers, title: str, region: str):
     return (None, None, "", "")
 
 
+_PLACE_SCAN_LIMIT = 20000   # 재사용 매칭용 스캔 범위(카카오 호출 없는 로컬 비교라 API 예산과 무관)
+
+
+def _runway_days(deadline) -> int:
+    """마감까지 남은 일수(우선순위용). 마감 미상은 오래 남은 것으로 간주(9999)."""
+    if not deadline:
+        return 9999
+    try:
+        return (datetime.date.fromisoformat(deadline) - datetime.date.today()).days
+    except ValueError:
+        return 9999
+
+
 async def _place_backfill(limit: int = 40) -> None:
     """활성 방문형 캠페인의 업체명을 카카오 키워드 검색해 실제 좌표를 저장(매 주기 일부씩).
-    성공/미스 모두 place_geo 에 기록 → 미스는 재조회하지 않음(일시 오류만 다음 주기 재시도)."""
+    성공/미스 모두 place_geo 에 기록 → 미스는 재조회하지 않음(일시 오류만 다음 주기 재시도).
+
+    카카오 호출 예산(limit)은 그대로 두고 두 가지로 체감 처리량을 늘린다:
+      1) 같은 업체(제목+지역 일치)가 다른 사이트에 이미 지오코딩돼 있으면 API 호출 없이 그대로 재사용
+         (체험단 업계 특성상 동일 매장이 여러 플랫폼에 동시 노출되는 경우가 많음).
+      2) 카카오 호출이 필요한 나머지는 마감까지 더 오래 남은 캠페인부터 처리해, 호출 1건당
+         지도에 노출되는 기간(가치)을 극대화 — 어차피 곧 마감될 캠페인은 지오코딩해도 노출 시간이 짧다."""
     key = config.KAKAO_REST_API_KEY
     if not key:
         return
-    rows = db.places_missing_geo(limit)
+    rows = db.places_missing_geo(_PLACE_SCAN_LIMIT)
     if not rows:
         return
+
+    known = db.known_place_geo()
+    cache = {}
+    for k in known:
+        cache.setdefault((_venue_key(k["title"]), k["region"] or ""), k)
+
+    reused = 0
+    todo = []
+    for r in rows:
+        if not _venue_name(r["title"]):
+            db.place_geo_set(r["site"], r["cid"], None, None)   # 업체명 없음 → 재조회 방지
+            continue
+        hit = cache.get((_venue_key(r["title"]), r["region"] or ""))
+        if hit:
+            db.place_geo_set(r["site"], r["cid"], hit["lat"], hit["lng"], hit["place"], hit["addr"])
+            reused += 1
+        else:
+            todo.append(r)
+    if reused:
+        log.info("[place] 동일 업체 좌표 재사용 %d건(카카오 호출 없음)", reused)
+
+    todo.sort(key=lambda r: _runway_days(r.get("deadline")), reverse=True)
+    todo = todo[:limit]
+    if not todo:
+        return
+
     headers = {"Authorization": f"KakaoAK {key}"}
-    hit = 0
+    hit_cnt = 0
     async with httpx.AsyncClient(trust_env=False, timeout=15.0) as client:
-        for r in rows:
-            if not _venue_name(r["title"]):
-                db.place_geo_set(r["site"], r["cid"], None, None)   # 업체명 없음 → 재조회 방지
-                continue
+        for r in todo:
             res = await _geocode_campaign(client, headers, r["title"], r["region"] or "")
             if res == "AUTH":
                 log.warning("[place] 카카오 인증 거부 → 이번 주기 중단")
@@ -372,10 +418,10 @@ async def _place_backfill(limit: int = 40) -> None:
             lat, lng, place, addr = res
             db.place_geo_set(r["site"], r["cid"], lat, lng, place, addr)   # 성공/미스 모두 기록
             if lat is not None:
-                hit += 1
+                hit_cnt += 1
             await asyncio.sleep(0.1)
-    if hit:
-        log.info("[place] 캠페인 좌표 %d건 저장", hit)
+    if hit_cnt:
+        log.info("[place] 캠페인 좌표 %d건 저장", hit_cnt)
 
 
 async def _prune_reviewnote(interval: int = 10800) -> None:
