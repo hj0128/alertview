@@ -63,14 +63,13 @@ def _channel(title: str) -> str:
     return "블로그"
 
 
-_IMG_RE = re.compile(r'number=(\d+)[^>]*>\s*<img[^>]+src=["\']([^"\']+)["\']')
+# 카드 안에 <img> 가 여러 개(진행상태 배지 icon_flow_*.png, 신규 배지 icon_new/pop.png,
+# 배경 bg_*.png) 나온 뒤에야 실제 썸네일(./mallimg/...)이 나온다 → mallimg 경로만 선택.
+_IMG_RE = re.compile(r'src=["\'](\./mallimg/[^"\']+)["\']')
 
 
 def _parse(html: str, category: str) -> List[Optional[Campaign]]:
     """반환: 각 cid 의 Campaign(활성) 또는 None(마감/정보없음). 페이징 종료 판정은 cid 수로."""
-    imgs = {}
-    for m in _IMG_RE.finditer(html):
-        imgs.setdefault(m.group(1), m.group(2))
     last = {}
     for m in _NUM_RE.finditer(html):
         last[m.group(1)] = m.start()
@@ -78,7 +77,8 @@ def _parse(html: str, category: str) -> List[Optional[Campaign]]:
     out: List[Optional[Campaign]] = []
     for i, (cid, pos) in enumerate(items):
         end = items[i + 1][1] if i + 1 < len(items) else pos + 1200
-        seg = _strip(html[pos:end])
+        raw_seg = html[pos:end]
+        seg = _strip(raw_seg)
         if "신청" not in seg or "모집" not in seg:
             out.append(None)
             continue
@@ -108,8 +108,8 @@ def _parse(html: str, category: str) -> List[Optional[Campaign]]:
             if recruit:
                 competition = round(applicants / recruit, 1)
 
-        src = imgs.get(cid, "")
-        image = (BASE + src[1:] if src.startswith("./") else (BASE + src if src.startswith("/") else src)) if src else ""
+        im = _IMG_RE.search(raw_seg)
+        image = (BASE + im.group(1)[1:]) if im else ""   # './mallimg/...' → BASE + '/mallimg/...'
 
         out.append(Campaign(
             site="odiya", site_name="어디야", cid=cid, title=title,

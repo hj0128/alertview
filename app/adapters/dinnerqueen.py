@@ -15,8 +15,8 @@ from .base import BaseAdapter, Campaign, guess_region, guess_in, CHANNELS, CATEG
 BASE = "https://dinnerqueen.net"
 LIST_URL = f"{BASE}/taste?ct=전체"
 _ID_RE = re.compile(r"/taste/(\d+)")
-_APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*/\s*모집\s*([\d,]+)")
-_DDAY_RE = re.compile(r"D-(\d+)")
+_APPLY_RE = re.compile(r"신청\s*([\d,]+)\s*/\s*(?:모집\s*)?([\d,]+)")
+_DDAY_RE = re.compile(r"D-(\d+)|(\d+)\s*일\s*남음")
 log = logging.getLogger(__name__)
 _IMG_ATTRS = ["data-src", "data-original", "data-lazy-src", "data-lazy", "src"]
 
@@ -77,7 +77,7 @@ def _parse_page(html: str, category: str = "") -> List[Campaign]:
         image = _pick_img(node) or _pick_img(a)
         # 디너의여왕 D-day 는 실제보다 1 적게 표기 → +1 보정('오늘마감'→D-1, 'D-1'→D-2 …)
         if (mm := _DDAY_RE.search(blob)):
-            dday = _to_int(mm.group(1))
+            dday = _to_int(mm.group(1) or mm.group(2))
             if dday is not None:
                 dday += 1
         elif "D'day" in blob or "D-day" in blob or "Dday" in blob or "오늘마감" in blob:
